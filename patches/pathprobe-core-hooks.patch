@@ -1,0 +1,171 @@
+diff --git a/src/backend/optimizer/path/joinpath.c b/src/backend/optimizer/path/joinpath.c
+index 713283a..f68c6d3 100644
+--- a/src/backend/optimizer/path/joinpath.c
++++ b/src/backend/optimizer/path/joinpath.c
+@@ -987,6 +987,12 @@ try_nestloop_path(PlannerInfo *root,
+ 	{
+ 		/* Waste no memory when we reject a path here */
+ 		bms_free(required_outer);
++		if (pathprobe_path_skipped_hook)
++			pathprobe_path_skipped_hook(joinrel, T_NestLoop,
++										workspace.disabled_nodes,
++										workspace.startup_cost,
++										workspace.total_cost,
++										required_outer);
+ 	}
+ }
+ 
+@@ -1184,6 +1190,12 @@ try_mergejoin_path(PlannerInfo *root,
+ 	{
+ 		/* Waste no memory when we reject a path here */
+ 		bms_free(required_outer);
++		if (pathprobe_path_skipped_hook)
++			pathprobe_path_skipped_hook(joinrel, T_MergeJoin,
++										workspace.disabled_nodes,
++										workspace.startup_cost,
++										workspace.total_cost,
++										required_outer);
+ 	}
+ }
+ 
+@@ -1335,6 +1347,12 @@ try_hashjoin_path(PlannerInfo *root,
+ 	{
+ 		/* Waste no memory when we reject a path here */
+ 		bms_free(required_outer);
++		if (pathprobe_path_skipped_hook)
++			pathprobe_path_skipped_hook(joinrel, T_HashJoin,
++										workspace.disabled_nodes,
++										workspace.startup_cost,
++										workspace.total_cost,
++										required_outer);
+ 	}
+ }
+ 
+diff --git a/src/backend/optimizer/util/pathnode.c b/src/backend/optimizer/util/pathnode.c
+index 73518c8..d2f23af 100644
+--- a/src/backend/optimizer/util/pathnode.c
++++ b/src/backend/optimizer/util/pathnode.c
+@@ -55,6 +55,31 @@ static bool pathlist_is_reparameterizable_by_child(List *pathlist,
+ 												   RelOptInfo *child_rel);
+ 
+ 
++/*
++ * pathprobe hooks — add_path competition probe
++ *
++ * Both default to NULL (no-op). pathprobe.so sets them in _PG_init().
++ * pathprobe_path_rejected_hook: new_path dominated; dominated_by is
++ *   cheapest_total_path proxy. new_path pfree'd after hook returns.
++ * pathprobe_path_accepted_hook: new_path survived; dominated_list may be NIL.
++ */
++typedef void (*pathprobe_path_rejected_hook_type)(RelOptInfo *rel,
++												  Path *new_path,
++												  Path *dominated_by);
++typedef void (*pathprobe_path_accepted_hook_type)(RelOptInfo *rel,
++												  Path *new_path,
++												  List *dominated_list);
++
++PGDLLIMPORT pathprobe_path_rejected_hook_type pathprobe_path_rejected_hook = NULL;
++PGDLLIMPORT pathprobe_path_accepted_hook_type pathprobe_path_accepted_hook = NULL;
++
++/*
++ * pathprobe_path_skipped_hook — defined here (pathnode.c), called from joinpath.c.
++ * Fires when add_path_precheck() returns false: join path never constructed.
++ */
++PGDLLIMPORT pathprobe_path_skipped_hook_type pathprobe_path_skipped_hook = NULL;
++
++
+ /*****************************************************************************
+  *		MISC. PATH UTILITIES
+  *****************************************************************************/
+@@ -460,6 +485,7 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
+ {
+ 	bool		accept_new = true;	/* unless we find a superior old path */
+ 	int			insert_at = 0;	/* where to insert new item */
++	List	   *dominated_paths = NIL;	/* paths new_path displaces, for hook */
+ 	List	   *new_path_pathkeys;
+ 	ListCell   *p1;
+ 
+@@ -627,6 +653,8 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
+ 			/*
+ 			 * Delete the data pointed-to by the deleted cell, if possible
+ 			 */
++			if (pathprobe_path_accepted_hook)
++				dominated_paths = lappend(dominated_paths, old_path);
+ 			if (!IsA(old_path, IndexPath))
+ 				pfree(old_path);
+ 		}
+@@ -653,12 +681,26 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
+ 
+ 	if (accept_new)
+ 	{
++		/* new_path survived — call accepted hook with displaced list */
++		if (pathprobe_path_accepted_hook)
++		{
++			pathprobe_path_accepted_hook(parent_rel, new_path, dominated_paths);
++			list_free(dominated_paths);
++		}
+ 		/* Accept the new path: insert it at proper place in pathlist */
+ 		parent_rel->pathlist =
+ 			list_insert_nth(parent_rel->pathlist, insert_at, new_path);
+ 	}
+ 	else
+ 	{
++		/*
++		 * new_path was rejected. Pass cheapest_total_path as proxy for
++		 * the dominating path — honest approximation; actual dominator
++		 * may differ for startup-cost or parameterized comparisons.
++		 */
++		if (pathprobe_path_rejected_hook)
++			pathprobe_path_rejected_hook(parent_rel, new_path,
++										 parent_rel->cheapest_total_path);
+ 		/* Reject and recycle the new path */
+ 		if (!IsA(new_path, IndexPath))
+ 			pfree(new_path);
+diff --git a/src/include/optimizer/pathnode.h b/src/include/optimizer/pathnode.h
+index e8db321..00843de 100644
+--- a/src/include/optimizer/pathnode.h
++++ b/src/include/optimizer/pathnode.h
+@@ -17,6 +17,43 @@
+ #include "nodes/bitmapset.h"
+ #include "nodes/pathnodes.h"
+ 
++/*
++ * pathprobe add_path competition hooks.
++ * Declared here so pathprobe.so can reference them as extern.
++ *
++ * pathprobe_path_rejected_hook: called when new_path is dominated.
++ *   new_path will be pfree'd after hook returns; snapshot all needed fields.
++ *   dominated_by is cheapest_total_path proxy (best available approximation).
++ *
++ * pathprobe_path_accepted_hook: called when new_path survives.
++ *   dominated_list: paths displaced by new_path (may be NIL).
++ */
++typedef void (*pathprobe_path_rejected_hook_type)(RelOptInfo *rel,
++												  Path *new_path,
++												  Path *dominated_by);
++typedef void (*pathprobe_path_accepted_hook_type)(RelOptInfo *rel,
++												  Path *new_path,
++												  List *dominated_list);
++
++extern PGDLLIMPORT pathprobe_path_rejected_hook_type pathprobe_path_rejected_hook;
++extern PGDLLIMPORT pathprobe_path_accepted_hook_type pathprobe_path_accepted_hook;
++
++/*
++ * pathprobe_path_skipped_hook — fires when add_path_precheck() returns false.
++ * The join path was never constructed (neverborn path event).
++ * Declared here so pathprobe.so can reference it as extern.
++ * Defined in joinpath.c.
++ */
++typedef void (*pathprobe_path_skipped_hook_type)(RelOptInfo *joinrel,
++												 NodeTag     join_pathtype,
++												 int         disabled_nodes,
++												 Cost        startup_cost,
++												 Cost        total_cost,
++												 Relids      required_outer);
++
++extern PGDLLIMPORT pathprobe_path_skipped_hook_type pathprobe_path_skipped_hook;
++
++
+ /* Hook for plugins to get control in build_simple_rel() */
+ typedef void (*build_simple_rel_hook_type) (PlannerInfo *root,
+ 											RelOptInfo *rel,
