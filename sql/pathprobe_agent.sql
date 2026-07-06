@@ -1,0 +1,70 @@
+-- agent-hardening regression: JSON escaping, machine blocks, limits, probe2
+LOAD 'pathprobe';
+
+CREATE TABLE agt (id int, v int);
+INSERT INTO agt SELECT g, g % 100 FROM generate_series(1, 2200) g;
+ANALYZE agt;
+
+-- 1. JSON escaping: quotes, backslash, newline -> parseable by jsonb_in
+SELECT (pathprobe_json($q$ SELECT 'a "quote"', E'back\\slash', E'new
+line' $q$)::jsonb) IS NOT NULL AS escaping_valid;
+
+-- 2. multi-candidate: separate fates, machine fields
+SELECT c->>'pathname' AS pathname,
+       c->>'fate' AS fate,
+       (c->>'injected')::bool AS injected,
+       c->'event_counts'->>'rejected' AS rej
+FROM jsonb_array_elements(
+  pathprobe_propose_json($$ SELECT * FROM agt WHERE id = 42 $$,
+   '{"candidates":[
+     {"target":{"relname":"agt"},"candidate":{"pathname":"strong","provider":"t"},"cost":{"total_cost":0.5},"mode":{"winner_forbidden":true}},
+     {"target":{"relname":"agt"},"candidate":{"pathname":"loser","provider":"t"},"cost":{"startup_cost":500.0,"total_cost":99999.0}},
+     {"target":{"relname":"no_such_rel"},"candidate":{"pathname":"offq","provider":"t"},"cost":{"total_cost":1.0}}]}'
+  )::jsonb->'candidates') c
+ORDER BY pathname;
+
+-- 3. advisor: machine block + in_plan boolean on a no-index table
+SELECT (j->'advisor'->>'enabled')::bool AS adv_enabled,
+       (j->'advisor'->'baseline_cost') IS NOT NULL AS has_baseline,
+       (j->'advisor'->'plan_cost') IS NOT NULL AS has_plan_cost,
+       (j->'advisor'->'query_level_benefit')::text::numeric > 0 AS benefit_positive,
+       EXISTS (SELECT 1 FROM jsonb_array_elements(j->'hypo_indexes') h
+               WHERE (h->>'in_plan')::bool) AS some_in_plan
+FROM (SELECT pathprobe_propose_json($$ SELECT * FROM agt WHERE id = 42 AND v > 90 $$,
+                            '{"advise": true}')::jsonb AS j) s;
+
+-- 4. existing-index prefix skip: with option, the prefix candidate vanishes
+CREATE INDEX agt_wide ON agt (v, id);
+SELECT EXISTS (SELECT 1 FROM jsonb_array_elements(
+         pathprobe_propose_json($$ SELECT v, id FROM agt WHERE v > 95 $$,
+           '{"advise": true, "advise_skip_prefix": true}')::jsonb
+         -> 'hypo_indexes') h
+       WHERE h->>'relname' = 'agt') AS prefix_offered_with_skip;
+DROP INDEX agt_wide;
+
+-- 5. limits: tiny max_events -> valid JSON, truncation flag, monotone seq
+SET pathprobe.max_events = 16;
+SELECT (j->'limits'->>'events_truncated')::bool AS events_truncated,
+       jsonb_array_length(j->'events') <= 16 AS capped,
+       (SELECT bool_and(ok) FROM (
+          SELECT (e->>'seq')::int >
+                 lag((e->>'seq')::int, 1, 0) OVER () AS ok
+          FROM jsonb_array_elements(j->'events') e) s) AS seq_monotone
+FROM (SELECT pathprobe_propose_json(
+       $$ SELECT * FROM agt a1 JOIN agt a2 ON a1.id = a2.v WHERE a1.v > 50 $$,
+       '{"advise": true}')::jsonb AS j) s2;
+RESET pathprobe.max_events;
+
+-- 6. enable_probe2 runtime off -> no j2 events in new calls
+SET pathprobe.enable_probe2 = off;
+SELECT count(*) FILTER (WHERE e->>'src' = 'j2') AS j2_when_off
+FROM jsonb_array_elements(
+  pathprobe_json($$ SELECT * FROM agt a1 JOIN agt a2 ON a1.id = a2.id $$)::jsonb
+  -> 'events') e;
+SET pathprobe.enable_probe2 = on;
+SELECT count(*) FILTER (WHERE e->>'src' = 'j2') > 0 AS j2_when_on
+FROM jsonb_array_elements(
+  pathprobe_json($$ SELECT * FROM agt a1 JOIN agt a2 ON a1.id = a2.id $$)::jsonb
+  -> 'events') e;
+
+DROP TABLE agt;
