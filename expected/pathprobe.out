@@ -1,0 +1,113 @@
+LOAD 'pathprobe';
+CREATE EXTENSION IF NOT EXISTS pathprobe;
+SET pathprobe.explain = on;
+SET max_parallel_workers_per_gather = 0;
+CREATE TABLE pp_t(id int, v int);
+INSERT INTO pp_t SELECT g, g % 100 FROM generate_series(1, 2000) g;
+CREATE INDEX pp_t_id ON pp_t(id);
+CREATE INDEX pp_t_v  ON pp_t(v);
+ANALYZE pp_t;
+-- point lookup: IndexScan wins; BitmapHeapScan rejected (probe1) -> all paths visible
+EXPLAIN (COSTS OFF) SELECT * FROM pp_t WHERE id = 42;
+                                         QUERY PLAN                                         
+--------------------------------------------------------------------------------------------
+ Index Scan using pp_t_id on pp_t
+   Index Cond: (id = 42)
+ 
+ PathProbe  [probe0+probe1+precheck: full path life visible]
+ rels: 1=pp_t  
+ -------------------------------------------------------------------
+  seq  src  rel           pathtype              cost_total  gap                     event
+ -------------------------------------------------------------------
+ #1    p1  {1}           BitmapHeapScan                                            REJECTED
+ #2    p0  {1}           IndexScan                                                 survived
+ -------------------------------------------------------------------
+ total events: 2
+ 
+ Summary (per relation x strategy)
+ -------------------------------------------------------------------
+   rel           strategy             excl  skip  rej  acc  surv  best_cost
+ -------------------------------------------------------------------
+   {1}           BitmapHeapScan          0     0    1    0     0           -
+   {1}           IndexScan               0     0    0    0     1           -
+ -------------------------------------------------------------------
+(20 rows)
+
+-- range + order: reverse-case (kept: order? / kept: startup) on non-cheapest survivors
+EXPLAIN (COSTS OFF) SELECT * FROM pp_t WHERE v BETWEEN 5 AND 8 ORDER BY v;
+                                                QUERY PLAN                                                 
+-----------------------------------------------------------------------------------------------------------
+ Sort
+   Sort Key: v
+   ->  Bitmap Heap Scan on pp_t
+         Recheck Cond: ((v >= 5) AND (v <= 8))
+         ->  Bitmap Index Scan on pp_t_v
+               Index Cond: ((v >= 5) AND (v <= 8))
+ 
+ PathProbe  [probe0+probe1+precheck: full path life visible]
+ rels: 1=pp_t  
+ -------------------------------------------------------------------
+  seq  src  rel           pathtype              cost_total  gap                     event
+ -------------------------------------------------------------------
+ #1    p0  {1}           BitmapHeapScan                                            survived
+ #2    p0  {1}           IndexScan                                                 survived  kept: startup
+ #3    p1  ?             IndexScan                                                 REJECTED
+ -------------------------------------------------------------------
+ total events: 3
+ 
+ Summary (per relation x strategy)
+ -------------------------------------------------------------------
+   rel           strategy             excl  skip  rej  acc  surv  best_cost
+ -------------------------------------------------------------------
+   {1}           BitmapHeapScan          0     0    0    0     1           -
+   {1}           IndexScan               0     0    0    0     1           -
+ -------------------------------------------------------------------
+(25 rows)
+
+-- structured output: FORMAT JSON section must be valid machine-readable JSON
+EXPLAIN (FORMAT JSON, COSTS OFF) SELECT * FROM pp_t WHERE id = 42;
+               QUERY PLAN               
+----------------------------------------
+ [                                     +
+   {                                   +
+     "Plan": {                         +
+       "Node Type": "Index Scan",      +
+       "Parallel Aware": false,        +
+       "Async Capable": false,         +
+       "Scan Direction": "Forward",    +
+       "Index Name": "pp_t_id",        +
+       "Relation Name": "pp_t",        +
+       "Alias": "pp_t",                +
+       "Disabled": false,              +
+       "Index Cond": "(id = 42)"       +
+     },                                +
+     "PathProbe": [                    +
+       {                               +
+         "Seq": 1,                     +
+         "Rel": "{1}",                 +
+         "Path Type": "BitmapHeapScan",+
+         "Event": "rejected",          +
+         "Parameterized": false        +
+       },                              +
+       {                               +
+         "Seq": 2,                     +
+         "Rel": "{1}",                 +
+         "Path Type": "IndexScan",     +
+         "Event": "survived",          +
+         "Parameterized": false        +
+       }                               +
+     ]                                 +
+   }                                   +
+ ]
+(1 row)
+
+-- negative: feature off -> no PathProbe section
+SET pathprobe.explain = off;
+EXPLAIN (COSTS OFF) SELECT * FROM pp_t WHERE id = 42;
+            QUERY PLAN            
+----------------------------------
+ Index Scan using pp_t_id on pp_t
+   Index Cond: (id = 42)
+(2 rows)
+
+DROP TABLE pp_t;

@@ -1,0 +1,299 @@
+/*-------------------------------------------------------------------------
+ * pathprobe_json.c
+ * Part of pathprobe.  Distributed under the PostgreSQL License;
+ * see the repository LICENSE file.
+ *-------------------------------------------------------------------------
+ */
+/*
+ * pathprobe_json.c - JSON renderer (package v1.2)
+ *
+ * render_json(): same data as render_text(), machine-readable.
+ * pathprobe_json(): SQL wrapper returning text (valid JSON).
+ *
+ * Output structure:
+ * {
+ *   "version": "1.1",     -- output-format version, NOT the package version
+ *   "rels": {"1": "t", "2": "s"},
+ *   "events": [
+ *     {"seq":1, "src":"p1", "rel":"{1}", "pathtype":"BitmapHeapScan",
+ *      "cost_total":11.27, "kind":"rejected"},
+ *     ...
+ *   ],
+ *   "summary": [
+ *     {"rel":"{1,2}", "strategy":"NestLoop",
+ *      "excluded":0, "skipped":5, "rejected":1, "accepted":0, "survived":0},
+ *     ...
+ *   ]
+ * }
+ */
+
+#include "postgres.h"
+
+#include "fmgr.h"
+#include "lib/stringinfo.h"
+#include "nodes/bitmapset.h"
+#include "utils/builtins.h"
+#include "utils/memutils.h"
+
+#include "pathprobe.h"
+
+/* single JSON string sink: full escaping lives in pathprobe_json_str() */
+static void
+json_str(StringInfo out, const char *s)
+{
+	pathprobe_json_str(out, s);
+}
+
+void
+render_json(PathProbeReport *report, StringInfo out, PathProbeOpts *opts,
+			const char *query_string)
+{
+	PathEventLog *log = report->log;
+	PathSummary *sum;
+	int			i;
+	bool		first;
+
+	appendStringInfoString(out, "{\n");
+
+	/* version */
+	appendStringInfoString(out, "  \"version\": \"1.1\",\n");
+	if (query_string)
+	{
+		appendStringInfoString(out, "  \"query\": ");
+		json_str(out, query_string);
+		appendStringInfoString(out, ",\n");
+	}
+
+	/* rels legend */
+	appendStringInfoString(out, "  \"rels\": {");
+	if (log->rtmap)
+	{
+		int			ri;
+		bool		first_rel = true;
+
+		for (ri = 0; ri < log->rtmap->nentries; ri++)
+		{
+			char		keybuf[16];
+
+			if (!log->rtmap->names[ri])
+				continue;
+			if (!first_rel)
+				appendStringInfoChar(out, ',');
+			first_rel = false;
+			snprintf(keybuf, sizeof(keybuf), "%d", ri + 1);
+			json_str(out, keybuf);
+			appendStringInfoChar(out, ':');
+			json_str(out, log->rtmap->names[ri]);
+		}
+	}
+	appendStringInfoString(out, "},\n");
+
+	/* events array */
+	appendStringInfoString(out, "  \"events\": [\n");
+	first = true;
+	for (i = 0; i < log->nevents; i++)
+	{
+		PathEvent  *ev = &log->events[i];
+		char		rel_buf[32];
+		const char *kind_str;
+		const char *src_str;
+
+		switch (ev->kind)
+		{
+			case PEK_EXCLUDED:
+				kind_str = "excluded";
+				break;
+			case PEK_SKIPPED:
+				kind_str = "skipped";
+				break;
+			case PEK_REJECTED:
+				kind_str = "rejected";
+				break;
+			case PEK_ACCEPTED:
+				kind_str = "accepted";
+				break;
+			case PEK_DISPLACED:
+				kind_str = "displaced";
+				break;
+			case PEK_SURVIVED:
+				kind_str = "survived";
+				break;
+			default:
+				kind_str = "unknown";
+				break;
+		}
+		switch (ev->source)
+		{
+			case PATH_SOURCE_PRECHECK:
+				src_str = "pc";
+				break;
+			case PATH_SOURCE_ADD_PATH:
+				src_str = "p1";
+				break;
+			case PATH_SOURCE_REL_HOOK:
+				src_str = "p0";
+				break;
+			case PATH_SOURCE_JOIN_HOOK:
+				src_str = "j2";
+				break;
+			case PATH_SOURCE_PROPOSED:
+				src_str = "wp";
+				break;
+			default:
+				src_str = "?";
+				break;
+		}
+
+		if (ev->relids && !bms_is_empty(ev->relids))
+			relids_to_str(ev->relids, rel_buf, sizeof(rel_buf));
+		else
+			strlcpy(rel_buf, "?", sizeof(rel_buf));
+
+		if (!first)
+			appendStringInfoString(out, ",\n");
+		first = false;
+
+		appendStringInfoString(out, "    {");
+		appendStringInfo(out, "\"seq\":%d,", ev->seq);
+		appendStringInfoString(out, "\"src\":");
+		json_str(out, src_str);
+		appendStringInfoString(out, ",\"rel\":");
+		json_str(out, rel_buf);
+		appendStringInfoString(out, ",\"pathtype\":");
+		json_str(out, pathtype_name(ev->pathtype));
+		appendStringInfo(out, ",\"cost_total\":%.2f", ev->cost_total);
+		appendStringInfoString(out, ",\"kind\":");
+		json_str(out, kind_str);
+		if (ev->label)
+		{
+			appendStringInfoString(out, ",\"label\":");
+			json_str(out, ev->label);
+		}
+		appendStringInfo(out, ",\"origin\":\"%s\"",
+						 (ev->label != NULL ||
+						  ev->source == PATH_SOURCE_PROPOSED) ?
+						 "proposed" : "real");
+
+		if (ev->gap_cost != 0.0)
+			appendStringInfo(out, ",\"gap_cost\":%.2f", ev->gap_cost);
+
+		if (ev->kind == PEK_SKIPPED)
+		{
+			const char *reason =
+				(ev->skip_reason == SKIP_DISABLED) ? "disabled" :
+				(ev->skip_reason == SKIP_PARAM_MISMATCH) ? "param_mismatch" :
+				(ev->skip_reason == SKIP_DOMINATED_EARLY) ? "dominated_early" : "unknown";
+
+			appendStringInfoString(out, ",\"skip_reason\":");
+			json_str(out, reason);
+		}
+
+		if (ev->is_parameterized)
+			appendStringInfoString(out, ",\"param\":true");
+
+		if (ev->disabled_nodes > 0)
+			appendStringInfo(out, ",\"disabled_nodes\":%d", ev->disabled_nodes);
+
+		appendStringInfoChar(out, '}');
+	}
+	appendStringInfoString(out, "\n  ],\n");
+
+	/* summary array */
+	sum = pelog_build_summary(log, CurrentMemoryContext);
+	appendStringInfo(out,
+					 "  \"limits\": {\"events_truncated\":%s,"
+					 "\"summary_truncated\":%s,"
+					 "\"max_events\":%d,\"max_summary_entries\":%d},\n",
+					 log->events_truncated ? "true" : "false",
+					 sum->truncated ? "true" : "false",
+					 pathprobe_max_events, pathprobe_max_summary_entries);
+	appendStringInfoString(out, "  \"summary\": [\n");
+	first = true;
+	for (i = 0; i < sum->nentries; i++)
+	{
+		PathSummaryEntry *ent = &sum->entries[i];
+		char		rel_buf[32];
+
+		relids_to_str(ent->relids, rel_buf, sizeof(rel_buf));
+
+		if (!first)
+			appendStringInfoString(out, ",\n");
+		first = false;
+
+		appendStringInfoString(out, "    {");
+		appendStringInfoString(out, "\"rel\":");
+		json_str(out, rel_buf);
+		appendStringInfoString(out, ",\"strategy\":");
+		json_str(out, pathtype_name(ent->pathtype));
+		appendStringInfo(out,
+						 ",\"excluded\":%d,\"skipped\":%d,\"rejected\":%d"
+						 ",\"accepted\":%d,\"survived\":%d",
+						 ent->n_excluded, ent->n_skipped, ent->n_rejected,
+						 ent->n_accepted, ent->n_survived);
+
+		if (ent->has_winner)
+			appendStringInfo(out, ",\"best_cost\":%.2f", ent->best_cost);
+
+		appendStringInfoChar(out, '}');
+	}
+	appendStringInfoString(out, "\n  ]\n}\n");
+	pfree(sum);
+}
+
+/* -------------------------------------------------------------------------
+ * SQL wrapper: pathprobe(query text) RETURNS text
+ * -------------------------------------------------------------------------
+ */
+PG_FUNCTION_INFO_V1(pathprobe);
+
+Datum
+pathprobe(PG_FUNCTION_ARGS)
+{
+	text	   *query_text = PG_GETARG_TEXT_PP(0);
+	char	   *query_string = text_to_cstring(query_text);
+
+	PathProbeOpts opts = {false, false};
+	PathProbeReport *report;
+	StringInfoData out;
+
+	if (strlen(query_string) > (size_t) pathprobe_max_query_length)
+		ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+						errmsg("pathprobe: query longer than pathprobe.max_query_length (%d)",
+							   pathprobe_max_query_length)));
+
+	report = pathprobe_internal(query_string, &opts);
+
+	initStringInfo(&out);
+	render_text(report, &out, &opts);
+
+	PG_RETURN_TEXT_P(cstring_to_text(out.data));
+}
+
+/* -------------------------------------------------------------------------
+ * SQL wrapper: pathprobe_json(query text) RETURNS text
+ * -------------------------------------------------------------------------
+ */
+PG_FUNCTION_INFO_V1(pathprobe_json);
+
+Datum
+pathprobe_json(PG_FUNCTION_ARGS)
+{
+	text	   *query_text = PG_GETARG_TEXT_PP(0);
+	char	   *query_string = text_to_cstring(query_text);
+
+	PathProbeOpts opts = {false, false};
+	PathProbeReport *report;
+	StringInfoData out;
+
+	if (strlen(query_string) > (size_t) pathprobe_max_query_length)
+		ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+						errmsg("pathprobe: query longer than pathprobe.max_query_length (%d)",
+							   pathprobe_max_query_length)));
+
+	report = pathprobe_internal(query_string, &opts);
+
+	initStringInfo(&out);
+	render_json(report, &out, &opts, query_string);
+
+	PG_RETURN_TEXT_P(cstring_to_text(out.data));
+}
