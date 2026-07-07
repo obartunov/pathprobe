@@ -320,61 +320,56 @@ pathprobe_proposed_pathname(const Path *path)
  * Aborts with ereport(ERROR) on missing required fields.
  * ----------
  */
+/*
+ * spec_key - look up a string key in a JSONB object container.
+ *
+ * Wraps findJsonbValueFromContainer with the key setup so the two-level
+ * descent and the typed getters do not each repeat it.
+ */
+static JsonbValue *
+spec_key(JsonbContainer *c, const char *key)
+{
+	JsonbValue	k;
+
+	if (c == NULL)
+		return NULL;
+	k.type = jbvString;
+	k.val.string.val = unconstify(char *, key);
+	k.val.string.len = strlen(key);
+	return findJsonbValueFromContainer(c, JB_FOBJECT, &k);
+}
+
+/*
+ * spec_path2 - descend spec.<path1>.<path2>; return the leaf value or NULL.
+ * path1 must be an object; the caller checks the leaf jbv type.
+ */
+static JsonbValue *
+spec_path2(Jsonb *jb, const char *path1, const char *path2)
+{
+	JsonbValue *jv;
+
+	if (!JB_ROOT_IS_OBJECT(jb))
+		return NULL;
+	jv = spec_key(&jb->root, path1);
+	if (!jv || jv->type != jbvBinary)
+		return NULL;
+	return spec_key((JsonbContainer *) jv->val.binary.data, path2);
+}
+
 static bool
 json_get_bool(Jsonb *jb, const char *path1, const char *path2, bool defval)
 {
-	JsonbValue *jv;
-	JsonbValue	key1,
-				key2;
-	JsonbContainer *c;
+	JsonbValue *jv = spec_path2(jb, path1, path2);
 
-	if (!JB_ROOT_IS_OBJECT(jb))
-		return defval;
-
-	key1.type = jbvString;
-	key1.val.string.val = (char *) path1;
-	key1.val.string.len = strlen(path1);
-	jv = findJsonbValueFromContainer(&jb->root, JB_FOBJECT, &key1);
-	if (!jv || jv->type != jbvBinary)
-		return defval;
-
-	c = (JsonbContainer *) jv->val.binary.data;
-	key2.type = jbvString;
-	key2.val.string.val = (char *) path2;
-	key2.val.string.len = strlen(path2);
-	jv = findJsonbValueFromContainer(c, JB_FOBJECT, &key2);
-	if (!jv || jv->type != jbvBool)
-		return defval;
-
-	return jv->val.boolean;
+	return (jv && jv->type == jbvBool) ? jv->val.boolean : defval;
 }
 
 static double
 json_get_number(Jsonb *jb, const char *path1, const char *path2, double defval)
 {
-	JsonbValue *jv;
-	JsonbValue	key1,
-				key2;
-	JsonbContainer *c;
+	JsonbValue *jv = spec_path2(jb, path1, path2);
 
-	if (!JB_ROOT_IS_OBJECT(jb))
-		return defval;
-
-	key1.type = jbvString;
-	key1.val.string.val = (char *) path1;
-	key1.val.string.len = strlen(path1);
-	jv = findJsonbValueFromContainer(&jb->root, JB_FOBJECT, &key1);
-	if (!jv || jv->type != jbvBinary)
-		return defval;
-
-	c = (JsonbContainer *) jv->val.binary.data;
-	key2.type = jbvString;
-	key2.val.string.val = (char *) path2;
-	key2.val.string.len = strlen(path2);
-	jv = findJsonbValueFromContainer(c, JB_FOBJECT, &key2);
-	if (!jv)
-		return defval;
-	if (jv->type == jbvNumeric)
+	if (jv && jv->type == jbvNumeric)
 		return DatumGetFloat8(DirectFunctionCall1(numeric_float8,
 												  NumericGetDatum(jv->val.numeric)));
 	return defval;
@@ -384,34 +379,11 @@ static char *
 json_get_string(Jsonb *jb, const char *path1, const char *path2,
 				const char *defval)
 {
-	JsonbValue *jv;
-	JsonbValue	key1,
-				key2;
-	JsonbContainer *c;
-	char	   *result;
+	JsonbValue *jv = spec_path2(jb, path1, path2);
 
-	if (!JB_ROOT_IS_OBJECT(jb))
-		return defval ? pstrdup(defval) : NULL;
-
-	key1.type = jbvString;
-	key1.val.string.val = (char *) path1;
-	key1.val.string.len = strlen(path1);
-	jv = findJsonbValueFromContainer(&jb->root, JB_FOBJECT, &key1);
-	if (!jv || jv->type != jbvBinary)
-		return defval ? pstrdup(defval) : NULL;
-
-	c = (JsonbContainer *) jv->val.binary.data;
-	key2.type = jbvString;
-	key2.val.string.val = (char *) path2;
-	key2.val.string.len = strlen(path2);
-	jv = findJsonbValueFromContainer(c, JB_FOBJECT, &key2);
 	if (!jv || jv->type != jbvString)
 		return defval ? pstrdup(defval) : NULL;
-
-	result = palloc(jv->val.string.len + 1);
-	memcpy(result, jv->val.string.val, jv->val.string.len);
-	result[jv->val.string.len] = '\0';
-	return result;
+	return pnstrdup(jv->val.string.val, jv->val.string.len);
 }
 
 static ProposedPathSpec *
@@ -441,23 +413,13 @@ parse_spec_json(Jsonb *spec_jb)
 	spec->parallel_aware = json_get_bool(spec_jb, "planner", "parallel_aware", false);
 	spec->npathkeys = 0;
 	{
-		JsonbValue	k,
-				   *pv;
+		JsonbValue *pv = spec_key(&spec_jb->root, "planner");
 
-		k.type = jbvString;
-		k.val.string.val = "planner";
-		k.val.string.len = strlen("planner");
-		pv = findJsonbValueFromContainer(&spec_jb->root, JB_FOBJECT, &k);
 		if (pv && pv->type == jbvBinary)
 		{
-			JsonbValue	k2,
-					   *av;
+			JsonbValue *av = spec_key((JsonbContainer *) pv->val.binary.data,
+									  "pathkeys");
 
-			k2.type = jbvString;
-			k2.val.string.val = "pathkeys";
-			k2.val.string.len = strlen("pathkeys");
-			av = findJsonbValueFromContainer(pv->val.binary.data,
-											 JB_FOBJECT, &k2);
 			if (av && av->type == jbvBinary &&
 				JsonContainerIsArray(av->val.binary.data))
 			{
@@ -584,16 +546,12 @@ static const char *const pathprobe_hint_methods[] = {
 static void
 propose_apply_hint_list(Jsonb *spec_jb, const char *key, const char *value)
 {
-	JsonbValue	k,
-			   *arr;
+	JsonbValue *arr;
 	JsonbContainer *ac;
 	int			n,
 				i;
 
-	k.type = jbvString;
-	k.val.string.val = unconstify(char *, key);
-	k.val.string.len = strlen(key);
-	arr = findJsonbValueFromContainer(&spec_jb->root, JB_FOBJECT, &k);
+	arr = spec_key(&spec_jb->root, key);
 	if (!arr)
 		return;
 	if (arr->type != jbvBinary || !JsonContainerIsArray(arr->val.binary.data))
@@ -634,17 +592,13 @@ propose_apply_hint_list(Jsonb *spec_jb, const char *key, const char *value)
 static int
 propose_apply_hints(Jsonb *spec_jb)
 {
-	JsonbValue	k,
-			   *hv;
+	JsonbValue *hv;
 	Jsonb	   *hints;
 	int			nest;
 
 	if (!JB_ROOT_IS_OBJECT(spec_jb))
 		return 0;
-	k.type = jbvString;
-	k.val.string.val = "hints";
-	k.val.string.len = strlen("hints");
-	hv = findJsonbValueFromContainer(&spec_jb->root, JB_FOBJECT, &k);
+	hv = spec_key(&spec_jb->root, "hints");
 	if (!hv)
 		return 0;
 	if (hv->type != jbvBinary || !JsonContainerIsObject(hv->val.binary.data))
@@ -654,9 +608,7 @@ propose_apply_hints(Jsonb *spec_jb)
 
 	nest = NewGUCNestLevel();
 
-	k.val.string.val = "allow_only";
-	k.val.string.len = strlen("allow_only");
-	if (findJsonbValueFromContainer(&hints->root, JB_FOBJECT, &k))
+	if (spec_key(&hints->root, "allow_only"))
 	{
 		const char *const *p;
 		char		guc[64];
@@ -676,15 +628,11 @@ propose_apply_hints(Jsonb *spec_jb)
 static bool
 spec_get_bool(Jsonb *spec_jb, const char *key)
 {
-	JsonbValue	k,
-			   *v;
+	JsonbValue *v;
 
 	if (!JB_ROOT_IS_OBJECT(spec_jb))
 		return false;
-	k.type = jbvString;
-	k.val.string.val = unconstify(char *, key);
-	k.val.string.len = strlen(key);
-	v = findJsonbValueFromContainer(&spec_jb->root, JB_FOBJECT, &k);
+	v = spec_key(&spec_jb->root, key);
 	return v && v->type == jbvBool && v->val.boolean;
 }
 
@@ -698,18 +646,11 @@ spec_get_advise(Jsonb *spec_jb)
 static bool
 spec_has_candidates(Jsonb *spec_jb)
 {
-	JsonbValue	key;
-
 	if (!JB_ROOT_IS_OBJECT(spec_jb))
 		return true;
-	key.type = jbvString;
-	key.val.string.val = "candidates";
-	key.val.string.len = strlen("candidates");
-	if (findJsonbValueFromContainer(&spec_jb->root, JB_FOBJECT, &key))
+	if (spec_key(&spec_jb->root, "candidates"))
 		return true;
-	key.val.string.val = "target";
-	key.val.string.len = strlen("target");
-	return findJsonbValueFromContainer(&spec_jb->root, JB_FOBJECT, &key) != NULL;
+	return spec_key(&spec_jb->root, "target") != NULL;
 }
 
 /*
@@ -1454,17 +1395,13 @@ static List *
 parse_hypo_array(Jsonb *spec_jb)
 {
 	List	   *out = NIL;
-	JsonbValue	key,
-			   *arr;
+	JsonbValue *arr;
 	JsonbContainer *ac;
 	int			n,
 				i;
 
-	key.type = jbvString;
-	key.val.string.val = "hypo_indexes";
-	key.val.string.len = strlen("hypo_indexes");
 	arr = JB_ROOT_IS_OBJECT(spec_jb) ?
-		findJsonbValueFromContainer(&spec_jb->root, JB_FOBJECT, &key) : NULL;
+		spec_key(&spec_jb->root, "hypo_indexes") : NULL;
 	if (!arr)
 		return NIL;
 	if (arr->type != jbvBinary || !JsonContainerIsArray(arr->val.binary.data))
@@ -1477,8 +1414,7 @@ parse_hypo_array(Jsonb *spec_jb)
 		JsonbValue *elem = getIthJsonbValueFromContainer(ac, i);
 		Jsonb	   *ejb;
 		HypoIndexSpec *h;
-		JsonbValue	ck,
-				   *cols;
+		JsonbValue *cols;
 		JsonbContainer *cc;
 		int			ncols,
 					c;
@@ -1490,31 +1426,21 @@ parse_hypo_array(Jsonb *spec_jb)
 
 		h = (HypoIndexSpec *) palloc0(sizeof(HypoIndexSpec));
 		{
-			JsonbValue	rk;
-			JsonbValue *rv;
+			JsonbValue *rv = spec_key(&ejb->root, "relname");
 
-			rk.type = jbvString;
-			rk.val.string.val = "relname";
-			rk.val.string.len = strlen("relname");
-			rv = findJsonbValueFromContainer(&ejb->root, JB_FOBJECT, &rk);
 			if (!rv || rv->type != jbvString)
 				ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 								errmsg("pathprobe: hypo_indexes[%d]: \"relname\" is required", i)));
 			h->relname = pnstrdup(rv->val.string.val, rv->val.string.len);
 
-			rk.val.string.val = "name";
-			rk.val.string.len = strlen("name");
-			rv = findJsonbValueFromContainer(&ejb->root, JB_FOBJECT, &rk);
+			rv = spec_key(&ejb->root, "name");
 			if (rv && rv->type == jbvString)
 				h->name = pnstrdup(rv->val.string.val, rv->val.string.len);
 			else
 				h->name = psprintf("hypo%d", i + 1);
 		}
 
-		ck.type = jbvString;
-		ck.val.string.val = "columns";
-		ck.val.string.len = strlen("columns");
-		cols = findJsonbValueFromContainer(&ejb->root, JB_FOBJECT, &ck);
+		cols = spec_key(&ejb->root, "columns");
 		if (!cols || cols->type != jbvBinary ||
 			!JsonContainerIsArray(cols->val.binary.data))
 			ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -1551,17 +1477,13 @@ static List *
 parse_hypo_sql(Jsonb *spec_jb)
 {
 	List	   *out = NIL;
-	JsonbValue	key,
-			   *arr;
+	JsonbValue *arr;
 	JsonbContainer *ac;
 	int			n,
 				i;
 
-	key.type = jbvString;
-	key.val.string.val = "hypo_sql";
-	key.val.string.len = strlen("hypo_sql");
 	arr = JB_ROOT_IS_OBJECT(spec_jb) ?
-		findJsonbValueFromContainer(&spec_jb->root, JB_FOBJECT, &key) : NULL;
+		spec_key(&spec_jb->root, "hypo_sql") : NULL;
 	if (!arr)
 		return NIL;
 	if (!superuser())
@@ -2182,15 +2104,10 @@ static List *
 parse_spec_multi(Jsonb *spec_jb)
 {
 	List	   *specs = NIL;
-	JsonbValue	key,
-			   *arr;
-
-	key.type = jbvString;
-	key.val.string.val = "candidates";
-	key.val.string.len = strlen("candidates");
+	JsonbValue *arr;
 
 	arr = JB_ROOT_IS_OBJECT(spec_jb) ?
-		findJsonbValueFromContainer(&spec_jb->root, JB_FOBJECT, &key) : NULL;
+		spec_key(&spec_jb->root, "candidates") : NULL;
 
 	if (arr && arr->type == jbvBinary)
 	{
