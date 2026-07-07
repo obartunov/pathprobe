@@ -6,3 +6,4 @@ regression.diffs
 regression.out
 tmp_check/
 log/
+__pycache__/
