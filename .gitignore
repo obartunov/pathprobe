@@ -1,9 +1,25 @@
+# PostgreSQL extension build artifacts
 *.o
 *.so
 *.bc
+
+# PostgreSQL regression output
 results/
 regression.diffs
 regression.out
 tmp_check/
 log/
+
+# Python helper artifacts
 __pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local model-runner/debug output
+*.tap
+*.tmp
+*.log
+*.sql.debug
+pathprobe-model-*.sql
+pathprobe-model-*.json
+pathprobe-model-*.tap
