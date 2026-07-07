@@ -654,6 +654,38 @@ spec_has_candidates(Jsonb *spec_jb)
 }
 
 /*
+ * pathprobe_analyze_one - parse-analyze and rewrite one raw statement.
+ *
+ * Single entry point for turning a RawStmt into a query tree, shared by the
+ * baseline and injected probe paths so they cannot drift into different
+ * analyze setups.
+ */
+static List *
+pathprobe_analyze_one(RawStmt *parsetree, const char *query_string)
+{
+	Oid		   *ptypes = NULL;
+	int			nparams = 0;
+
+	return pg_analyze_and_rewrite_varparams(parsetree, query_string,
+											&ptypes, &nparams, NULL);
+}
+
+/*
+ * pathprobe_plan_one - plan one query tree list; return the leading
+ * PlannedStmt, or NULL if planning produced none.  Both probe paths plan
+ * through this call so the cursor options stay identical.
+ */
+static PlannedStmt *
+pathprobe_plan_one(List *querytree_list, const char *query_string)
+{
+	List	   *plantree_list = pg_plan_queries(querytree_list, query_string,
+											   CURSOR_OPT_PARALLEL_OK, NULL);
+
+	return plantree_list != NIL ?
+		linitial_node(PlannedStmt, plantree_list) : NULL;
+}
+
+/*
  * [B] query-level benefit baseline (pg_adviser totalCostSaved shape):
  * plan the same query once more with no injections and no logging (all our
  * hooks are gated on pathprobe_active_log / active_proposal, both NULL
@@ -673,28 +705,11 @@ propose_baseline_cost(const char *query_string)
 	foreach(lc, parsetree_list)
 	{
 		RawStmt    *parsetree = lfirst_node(RawStmt, lc);
-		List	   *querytree_list;
-		List	   *plantree_list;
+		List	   *querytree_list = pathprobe_analyze_one(parsetree, query_string);
+		PlannedStmt *ps = pathprobe_plan_one(querytree_list, query_string);
 
-		{
-			Oid		   *ptypes = NULL;
-			int			nparams = 0;
-
-			querytree_list = pg_analyze_and_rewrite_varparams(parsetree,
-															   query_string,
-															   &ptypes,
-															   &nparams,
-															   NULL);
-		}
-		plantree_list = pg_plan_queries(querytree_list, query_string,
-										CURSOR_OPT_PARALLEL_OK, NULL);
-		if (plantree_list != NIL)
-		{
-			PlannedStmt *ps = linitial_node(PlannedStmt, plantree_list);
-
-			if (ps->planTree)
-				cost = ps->planTree->total_cost;
-		}
+		if (ps && ps->planTree)
+			cost = ps->planTree->total_cost;
 	}
 	return cost;
 }
@@ -2253,18 +2268,9 @@ pathprobe_propose_internal(const char *query_string,
 		{
 			RawStmt    *parsetree = lfirst_node(RawStmt, lc);
 			List	   *querytree_list;
-			List	   *plantree_list;
+			PlannedStmt *ps;
 
-			{
-				Oid		   *ptypes = NULL;
-				int			nparams = 0;
-
-				querytree_list = pg_analyze_and_rewrite_varparams(parsetree,
-																  query_string,
-																  &ptypes,
-																  &nparams,
-																  NULL);
-			}
+			querytree_list = pathprobe_analyze_one(parsetree, query_string);
 
 			/* ACL gate: authorize before any planning happens */
 			pathprobe_authorize_query(querytree_list, access);
@@ -2321,22 +2327,13 @@ pathprobe_propose_internal(const char *query_string,
 					pelog_build_rtmap(log, q->rtable);
 			}
 
-			plantree_list = pg_plan_queries(querytree_list,
-											query_string,
-											CURSOR_OPT_PARALLEL_OK,
-											NULL);
-			if (plantree_list != NIL)
+			ps = pathprobe_plan_one(querytree_list, query_string);
+			if (ps && ps->planTree)
 			{
-				PlannedStmt *ps = linitial_node(PlannedStmt, plantree_list);
-
-				if (ps->planTree)
-				{
-					plan_cost = ps->planTree->total_cost;
-					propose_mark_in_plan(ps->planTree, state.hypo);
-					foreach(lc2, ps->subplans)
-						propose_mark_in_plan((Plan *) lfirst(lc2),
-											 state.hypo);
-				}
+				plan_cost = ps->planTree->total_cost;
+				propose_mark_in_plan(ps->planTree, state.hypo);
+				foreach(lc2, ps->subplans)
+					propose_mark_in_plan((Plan *) lfirst(lc2), state.hypo);
 			}
 		}
 	}
