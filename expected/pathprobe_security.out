@@ -103,6 +103,13 @@ SELECT 'case9' AS c, sec_try('SELECT * FROM sec_view', '{"advise":true}');
  case9 | DENIED
 (1 row)
 
+-- 11. multi-statement string -> denied (cannot slip through one stmt at a time)
+SELECT 'case11' AS c, sec_try('SELECT * FROM sec_public; SELECT 1', '{"advise":true}');
+   c    | sec_try 
+--------+---------
+ case11 | DENIED
+(1 row)
+
 RESET ROLE;
 -- 4. superuser: hypo_sql allowed (current behaviour)
 SELECT 'case4' AS c,

@@ -65,7 +65,12 @@ pathprobe_authorize_query(List *querytree_list, PathProbeAccess *access)
 	if (access->is_superuser)
 		return;
 
-	/* Non-superuser: exactly one query, and it must be a plain SELECT. */
+	/*
+	 * Non-superuser: the statement must analyze to exactly one query.  More
+	 * than one here means a rule expanded the statement (e.g. DO ALSO); we do
+	 * not vet rule-expanded query sets for non-superusers.  (Multiple input
+	 * statements are already rejected before analysis by the caller.)
+	 */
 	if (querytree_list == NIL || list_length(querytree_list) != 1)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),

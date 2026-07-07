@@ -2320,6 +2320,18 @@ pathprobe_propose_internal(const char *query_string,
 	{
 		parsetree_list = pg_parse_query(query_string);
 
+		/*
+		 * Non-superuser probes are a single statement.  Enforce this on the
+		 * raw parsetree list before the loop: the per-statement authorize
+		 * check below only sees one statement's query tree and cannot tell
+		 * that several statements were submitted, so a multi-statement string
+		 * would otherwise slip through one statement at a time.
+		 */
+		if (!superuser() && list_length(parsetree_list) != 1)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("pathprobe: non-superuser probes must be a single statement")));
+
 		foreach(lc, parsetree_list)
 		{
 			RawStmt    *parsetree = lfirst_node(RawStmt, lc);

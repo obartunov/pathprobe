@@ -62,6 +62,8 @@ SELECT 'case7' AS c, sec_try('SELECT * FROM sec_hidden.h', '{"advise":true}');
 SELECT 'case8' AS c, sec_try('SELECT * FROM sec_rls', '{"advise":true}');
 -- 9. view over private base -> denied
 SELECT 'case9' AS c, sec_try('SELECT * FROM sec_view', '{"advise":true}');
+-- 11. multi-statement string -> denied (cannot slip through one stmt at a time)
+SELECT 'case11' AS c, sec_try('SELECT * FROM sec_public; SELECT 1', '{"advise":true}');
 
 RESET ROLE;
 
