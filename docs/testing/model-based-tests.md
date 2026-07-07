@@ -8,29 +8,38 @@ top of the `sql/*.sql` pg_regress smoke tests (which are retained):
 - security: the ACL/RLS/view/spec authorization boundary.
 - correctness: the path/hypo/advisor lifecycle reported in the JSON output.
 
-The model definitions are the source of truth. `tools/pathprobe_model_cases.py`
-declares the dimensions, fixtures, explicit cases, oracle, and generators;
-`tools/pathprobe_model_runner.py` installs fixtures, runs each case, and checks
-the declared expectations.
+The model is the source of truth. `t/PathprobeModel.pm` declares the
+dimensions, fixtures, explicit cases, oracle, and generators. The TAP tests
+`t/010_pathprobe_model_security.pl` and `t/011_pathprobe_model_correctness.pl`
+consume it. There is no Python dependency.
 
 ## Requirements
 
-- `python3` and `psql` (no third-party Python packages).
-- A running cluster with the `pathprobe` extension available.
-- `prove` for the optional TAP wrappers.
+- Perl with `PostgreSQL::Test::*` (the in-tree TAP support) and `IPC::Run`.
+- The `pathprobe` extension installed in the tree under test.
 
-Connection uses the standard environment plus `PP_PSQL`:
-`PP_PSQL`, `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`.
+Each test brings up its own node with `PostgreSQL::Test::Cluster`, installs the
+extension and fixtures (schema `ppm`, `ppm_hidden`, roles `ppm_*`), and runs the
+model cases as ordinary TAP assertions. `JSON::PP` and `MIME::Base64` (both
+core) are used to build specs and decode results.
 
 ## Running the tests
 
-    PP_PSQL=/path/to/psql PGHOST=/tmp PGPORT=5432 PGUSER=postgres \
-      PGDATABASE=postgres python3 tools/pathprobe_model_runner.py --mode smoke
+In an in-tree build these run under `make check` / meson like any TAP test:
 
-The runner creates its own fixtures (schema `ppm`, `ppm_hidden`, roles `ppm_*`)
-and drops them on exit. `--no-setup` reuses existing fixtures; `--keep` leaves
-them installed. `--only security|correctness` restricts the run. Exit status is
-non-zero if any case fails.
+    prove t/010_pathprobe_model_security.pl t/011_pathprobe_model_correctness.pl
+
+To run standalone against an installed cluster, set `PP_INSTALL_PATH` to the
+install prefix and the usual `PostgreSQL::Test` environment:
+
+    export PERL5LIB=/path/to/postgres/src/test/perl
+    export PG_REGRESS=/path/to/postgres/src/test/regress/pg_regress
+    export PATH=/path/to/install/bin:$PATH
+    export PP_INSTALL_PATH=/path/to/install
+    prove t/010_pathprobe_model_security.pl t/011_pathprobe_model_correctness.pl
+
+`PP_MODE` selects the mode (default `smoke`); `PP_SEED` sets the fuzz seed
+(default `42`).
 
 ## Test modes
 
@@ -39,7 +48,7 @@ non-zero if any case fails.
 - `pairwise`: all-pairs over the security dimensions plus the correctness
   parallelism/policy matrix.
 - `targeted`: explicit 3-wise coverage of the risky interaction groups.
-- `fuzz --seed N`: a seeded sample of the pairwise space; not part of the
+- `fuzz` (`PP_SEED=N`): a seeded sample of the pairwise space; not part of the
   deterministic coverage matrix.
 
 Case and skip totals are in `model-coverage.md`.
@@ -50,7 +59,8 @@ Generation is bounded; it is not a full Cartesian product. It uses equivalence
 classes over roles, query shapes, and spec shapes; explicit constraints that
 reject redundant or structurally invalid combinations; pairwise coverage; and
 targeted 3-wise groups. Every rejected combination is recorded with a reason,
-listed by `--list-skips` and summarised by `--emit-matrix`.
+listed by `tools/pathprobe_model_report.pl skips` and summarised by its
+`matrix` action.
 
 Constraints include: `none` spec is not a probe call; structured hypo on a view
 or on an absent column is a spec error, not a security outcome; superuser bypass
@@ -97,25 +107,22 @@ only when their `parallel_safe` flags match: cost-based cases align
 `winner_forbidden` relies on the default mismatch and therefore uses an allowed
 fate set rather than a single fate.
 
-## TAP integration
+## Offline model report
 
-`t/010_pathprobe_model_security.pl` and `t/011_pathprobe_model_correctness.pl`
-exec the runner with `--format tap` against an ambient cluster (`PG*` env,
-`PP_PSQL`; `PP_MODE` selects the mode, default `smoke`). They are runnable with
-`prove` and are not wired into the extension Makefile, so `make installcheck`
-(the `sql/*.sql` slices) is unaffected.
+`tools/pathprobe_model_report.pl` reads the model without a database:
 
-    PP_PSQL=/path/to/psql PGHOST=/tmp PGPORT=5432 PGUSER=postgres \
-      prove t/010_pathprobe_model_security.pl t/011_pathprobe_model_correctness.pl
+    perl tools/pathprobe_model_report.pl --mode MODE matrix     # coverage matrix (default)
+    perl tools/pathprobe_model_report.pl --mode MODE list       # cases
+    perl tools/pathprobe_model_report.pl --mode MODE skips      # rejected combinations
+    perl tools/pathprobe_model_report.pl --mode MODE emit-sql   # per-case SQL
 
-## SQL debug output
-
-`--emit-sql` prints the per-case SQL for inspection or export only. No generated
-SQL is committed; the model cases remain the source of truth.
+The `emit-sql` output is for inspection or export only. No generated SQL is
+committed; the model cases remain the source of truth.
 
 ## Maintenance notes
 
 - Regenerate the coverage matrix after changing the model:
-  `python3 tools/pathprobe_model_runner.py --emit-matrix` (see `model-coverage.md`).
+  `perl tools/pathprobe_model_report.pl --mode MODE matrix` (see
+  `model-coverage.md`).
 - `pathprobe_json` is not covered by these propose/advisor model tests; it has a
   separate observation-path ACL review.
