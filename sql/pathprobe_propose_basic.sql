@@ -1,6 +1,7 @@
 SET client_min_messages = warning;
 CREATE EXTENSION IF NOT EXISTS pathprobe;
 RESET client_min_messages;
+SET max_parallel_workers_per_gather = 0;
 CREATE TABLE pb (id int, v int);
 INSERT INTO pb SELECT g, g % 100 FROM generate_series(1, 2200) g;
 ANALYZE pb;
