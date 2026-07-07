@@ -98,6 +98,7 @@
 #include "tcop/utility.h"
 
 #include "pathprobe.h"
+#include "pathprobe_security.h"
 
 static void retag_proposed_events(PathEventLog *log);
 
@@ -190,6 +191,7 @@ typedef struct ProposedPathState
 	char	   *atoms_str;		/* printable atom stage (advise mode) */
 	int			advise_generated;	/* advisor candidates so far (cap) */
 	bool		advise_truncated;
+	PathProbeAccess *access;	/* ACL decision for this probe (never NULL) */
 	PlannerInfo *root;			/* for pathkeys lookup */
 	bool		injected;		/* did we inject at least one? */
 	bool		winner;			/* did it become cheapest_total? */
@@ -1565,6 +1567,11 @@ parse_hypo_sql(Jsonb *spec_jb)
 		findJsonbValueFromContainer(&spec_jb->root, JB_FOBJECT, &key) : NULL;
 	if (!arr)
 		return NIL;
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("pathprobe: hypo_sql is restricted to superusers in this release"),
+				 errhint("Use structured hypo_indexes on relations you can select.")));
 	if (arr->type != jbvBinary || !JsonContainerIsArray(arr->val.binary.data))
 		ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						errmsg("pathprobe: \"hypo_sql\" must be an array of strings")));
@@ -2270,7 +2277,8 @@ static PathProbeReport *
 pathprobe_propose_internal(const char *query_string,
 						   List *specs, List **hypo, bool advise,
 						   bool advise_skip_prefix,
-						   PathProbeOpts *opts)
+						   PathProbeOpts *opts,
+						   PathProbeAccess *access)
 {
 	MemoryContext log_mcxt;
 	PathEventLog *log;
@@ -2301,6 +2309,7 @@ pathprobe_propose_internal(const char *query_string,
 	state.root = NULL;
 	state.injected = false;
 	state.winner = false;
+	state.access = access;
 	active_proposal = &state;
 
 	/* Install proposal inject hook (chains probe0) */
@@ -2326,6 +2335,31 @@ pathprobe_propose_internal(const char *query_string,
 																  &ptypes,
 																  &nparams,
 																  NULL);
+			}
+
+			/* ACL gate: authorize before any planning happens */
+			pathprobe_authorize_query(querytree_list, access);
+
+			/* structured hypo indexes must target vetted relations */
+			if (!access->is_superuser)
+			{
+				ListCell   *hc;
+
+				foreach(hc, *hypo)
+				{
+					HypoIndexSpec *h = (HypoIndexSpec *) lfirst(hc);
+					Oid			hrelid = h->relid;
+
+					/* stmt form carries relid; structured form has relname */
+					if (!OidIsValid(hrelid) && h->relname)
+					{
+						RangeVar   *rv = makeRangeVar(NULL, h->relname, -1);
+
+						hrelid = RangeVarGetRelid(rv, AccessShareLock, true);
+					}
+					pathprobe_check_hypo_relation(access, hrelid, h->amoid,
+												  h->stmt != NULL);
+				}
 			}
 
 			if (querytree_list != NIL)
@@ -2380,6 +2414,26 @@ pathprobe_propose_internal(const char *query_string,
 	report->advise_atoms = state.atoms_str;
 	report->advisor_truncated = state.advise_truncated;
 
+	/*
+	 * Output guard (defence in depth): every hypothetical index relation that
+	 * reached the report must be in the authorized set.  Events and advisor
+	 * candidates derive from the vetted query range table and hypo list, so
+	 * this closes the loop without a parallel relid walk.  On violation we
+	 * ERROR rather than redact.
+	 */
+	if (!access->is_superuser)
+	{
+		ListCell   *hc;
+
+		foreach(hc, *hypo)
+		{
+			HypoIndexSpec *h = (HypoIndexSpec *) lfirst(hc);
+
+			if (OidIsValid(h->relid))
+				pathprobe_assert_relation_allowed(access, h->relid);
+		}
+	}
+
 	return report;
 }
 
@@ -2391,26 +2445,6 @@ pathprobe_propose_internal(const char *query_string,
  */
 static void render_propose_card(PathProbeReport *, StringInfo, PathProbeOpts *, ProposedPathSpec *, bool, bool);
 
-/*
- * KNOWN BLOCKER (public release): planning-only propose/advisor exposes
- * planner and statistics information for relations the caller may not be
- * allowed to inspect.  Safe initial rule per @yoda: superuser only for
- * the propose/advisor/hypo surfaces.  Relaxation (table-owner model)
- * requires an explicit rights model first; "planning-only" is NOT
- * harmless - an agent can mass-probe foreign tables via the planner.
- */
-static void
-propose_acl_gate(void)
-{
-	if (!superuser())
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("pathprobe: propose/advisor requires superuser"),
-				 errdetail("Planning-only probing exposes statistics of relations "
-						   "the caller may not be able to inspect."),
-				 errhint("Public-release ACL hardening is a known blocker; "
-						 "see README.")));
-}
 
 
 static void
@@ -2437,6 +2471,7 @@ pathprobe_propose(PG_FUNCTION_ARGS)
 	bool		advise;
 	ListCell   *lc;
 	PathProbeOpts opts = {false, false};
+	PathProbeAccess access;
 	PathProbeReport *report;
 	StringInfoData out;
 
@@ -2446,7 +2481,6 @@ pathprobe_propose(PG_FUNCTION_ARGS)
 						errmsg("pathprobe: query longer than pathprobe.max_query_length (%d)",
 							   pathprobe_max_query_length)));
 
-	propose_acl_gate();
 	pathprobe_propose_register_label_provider();
 
 	spec_datum = DirectFunctionCall1(jsonb_in, CStringGetDatum(spec_str));
@@ -2464,7 +2498,7 @@ pathprobe_propose(PG_FUNCTION_ARGS)
 		pathprobe_log_accepted = true;
 		report = pathprobe_propose_internal(query_str, specs, &hypo, advise,
 											spec_get_bool(spec_jb, "advise_skip_prefix"),
-											&opts);
+											&opts, &access);
 		pathprobe_log_accepted = saved_log_accepted;
 		if (hypo != NIL || advise)
 			report->baseline_cost = propose_baseline_cost(query_str);
@@ -2976,6 +3010,7 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 	bool		advise;
 	ProposedPathSpec *spec;
 	PathProbeOpts opts = {false, true};
+	PathProbeAccess access;
 	PathProbeReport *report;
 	StringInfoData out;
 	StringInfoData json_body;
@@ -2986,7 +3021,6 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 						errmsg("pathprobe: query longer than pathprobe.max_query_length (%d)",
 							   pathprobe_max_query_length)));
 
-	propose_acl_gate();
 	pathprobe_propose_register_label_provider();
 
 	spec_datum = DirectFunctionCall1(jsonb_in, CStringGetDatum(spec_str));
@@ -3005,7 +3039,7 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 		pathprobe_log_accepted = true;
 		report = pathprobe_propose_internal(query_str, specs, &hypo, advise,
 											spec_get_bool(spec_jb, "advise_skip_prefix"),
-											&opts);
+											&opts, &access);
 		pathprobe_log_accepted = saved_log_accepted;
 		if (hypo != NIL || advise)
 			report->baseline_cost = propose_baseline_cost(query_str);
