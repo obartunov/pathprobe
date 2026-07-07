@@ -2371,6 +2371,15 @@ pathprobe_propose_internal(const char *query_string,
 					}
 					pathprobe_check_hypo_relation(access, hrelid, h->amoid,
 												  h->stmt != NULL);
+
+					/*
+					 * Structured hypo: the caller must be able to SELECT every
+					 * named column, not just the relation.  (stmt/hypo_sql form
+					 * is already superuser-only, rejected above.)
+					 */
+					if (h->stmt == NULL)
+						pathprobe_check_hypo_columns(access, hrelid,
+													 h->colnames, h->ncols);
 				}
 			}
 

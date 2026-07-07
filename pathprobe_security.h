@@ -51,6 +51,18 @@ extern void pathprobe_check_hypo_relation(PathProbeAccess *access,
 										  bool from_sql);
 
 /*
+ * Column-level guard for a structured hypothetical index.  The relation must
+ * already have passed pathprobe_check_hypo_relation().  For non-superusers,
+ * every named column must be SELECT-grantable to the caller
+ * (pg_attribute_aclcheck), independent of the probed query's own columns: a
+ * hypo index on a column the caller cannot select would otherwise expose that
+ * column's statistics through advisor/frontier cost estimates.  Raises ERROR
+ * on an unknown column or a column without SELECT.
+ */
+extern void pathprobe_check_hypo_columns(PathProbeAccess *access, Oid relid,
+										 char **colnames, int ncols);
+
+/*
  * Output guard: assert a relation named in an event/candidate/advisor entry
  * is in the vetted set.  For superusers this is a no-op.  Raises ERROR on a
  * relation outside allowed_relids (defence in depth against a leak).

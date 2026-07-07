@@ -58,6 +58,15 @@ SELECT 'case5' AS c, sec_try('SELECT * FROM sec_public',
 -- 6. structured hypo on allowed relation -> OK
 SELECT 'case6' AS c, sec_try('SELECT * FROM sec_public WHERE v>5',
                              '{"hypo_indexes":[{"relname":"sec_public","columns":["v"]}]}');
+-- 6a. structured hypo on an allowed column of sec_cols -> OK
+SELECT 'case6a' AS c, sec_try('SELECT id, pub FROM sec_cols WHERE pub>5',
+                              '{"hypo_indexes":[{"relname":"sec_cols","columns":["pub"]}]}');
+-- 6b. structured hypo on a forbidden column (no SELECT on secret) -> denied
+SELECT 'case6b' AS c, sec_try('SELECT id, pub FROM sec_cols WHERE pub>5',
+                              '{"hypo_indexes":[{"relname":"sec_cols","columns":["secret"]}]}');
+-- 6c. composite structured hypo, one forbidden column -> denied
+SELECT 'case6c' AS c, sec_try('SELECT id, pub FROM sec_cols WHERE pub>5',
+                              '{"hypo_indexes":[{"relname":"sec_cols","columns":["pub","secret"]}]}');
 -- 7. table SELECT but missing schema USAGE -> denied
 SELECT 'case7' AS c, sec_try('SELECT * FROM sec_hidden.h', '{"advise":true}');
 -- 8. RLS table -> denied initially

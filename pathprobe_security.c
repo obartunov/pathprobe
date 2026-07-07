@@ -202,6 +202,56 @@ pathprobe_check_hypo_relation(PathProbeAccess *access, Oid relid, Oid amoid,
 }
 
 void
+pathprobe_check_hypo_columns(PathProbeAccess *access, Oid relid,
+							 char **colnames, int ncols)
+{
+	Oid			caller = GetUserId();
+	bool		table_select;
+	int			i;
+
+	if (access->is_superuser)
+		return;
+	/* Relation validity/membership is enforced by check_hypo_relation(). */
+	if (!OidIsValid(relid))
+		return;
+
+	/*
+	 * Table-level SELECT implies SELECT on every column, exactly as the
+	 * executor decides in ExecCheckOneRelPerms(): check the relation ACL
+	 * first, and only fall back to the column ACL when it is absent.  A bare
+	 * pg_attribute_aclcheck() would wrongly deny a caller holding table-level
+	 * SELECT but no explicit per-column grant.
+	 */
+	table_select = (pg_class_aclcheck(relid, caller, ACL_SELECT) == ACLCHECK_OK);
+
+	for (i = 0; i < ncols; i++)
+	{
+		AttrNumber	attnum;
+
+		if (colnames[i] == NULL)
+			continue;
+
+		attnum = get_attnum(relid, colnames[i]);
+		if (attnum == InvalidAttrNumber)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_COLUMN),
+					 errmsg("pathprobe: column \"%s\" of relation \"%s\" does not exist",
+							colnames[i], get_rel_name(relid))));
+
+		if (table_select)
+			continue;
+
+		if (pg_attribute_aclcheck(relid, attnum, caller,
+								  ACL_SELECT) != ACLCHECK_OK)
+			ereport(ERROR,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("pathprobe: no SELECT privilege on column \"%s\" of relation \"%s\"",
+							colnames[i], get_rel_name(relid)),
+					 errhint("A hypothetical index may only reference columns you can select.")));
+	}
+}
+
+void
 pathprobe_assert_relation_allowed(PathProbeAccess *access, Oid relid)
 {
 	if (access->is_superuser)
