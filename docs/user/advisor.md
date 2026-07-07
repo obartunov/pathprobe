@@ -1,9 +1,10 @@
 # Advisor and hypothetical indexes
 
-> The advisor runs through `pathprobe_propose_json()` and is **superuser-only**
-> in this release (a conservative safety gate; ACL-aware access is on the
-> roadmap).  A non-superuser call returns
-> `ERROR: pathprobe: propose/advisor requires superuser`.
+> The advisor runs through `pathprobe_propose_json()`.  Superusers get full
+> behavior; non-superusers run in the restricted ACL-aware mode (single
+> `SELECT`; only relations and columns the caller may already `SELECT`; RLS and
+> view/rule base exposure fail closed; `hypo_sql` denied; structured btree hypo
+> only, on authorized relations and columns).  See the README security status.
 
 Advisor mode asks a narrow question:
 

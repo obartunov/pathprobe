@@ -1,9 +1,10 @@
 # Proposed paths
 
-> `pathprobe_propose` / `pathprobe_propose_json` are **superuser-only** in this
-> release (a conservative safety gate; ACL-aware access is on the roadmap).  A
-> non-superuser call returns
-> `ERROR: pathprobe: propose/advisor requires superuser`.
+> **Access.**  Superusers get full behavior.  Non-superusers run in a
+> restricted ACL-aware mode: a single `SELECT` probe over relations and columns
+> the caller may already `SELECT` (all query levels authorized under the
+> caller's privileges; RLS and view/rule base exposure fail closed).  See the
+> README security status.
 
 Proposed paths let a user or tool inject a diagnostic candidate into real
 PostgreSQL planner competition.

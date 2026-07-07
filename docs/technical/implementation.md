@@ -23,7 +23,10 @@ pathprobe_json.c       observation wrappers pathprobe()/pathprobe_json()
 pathprobe_propose.c    pathprobe_propose()/pathprobe_propose_json();
                        CustomPath injection, candidate fate FSM,
                        hypothetical indexes, advisor, pathkeys claim,
-                       ACL gate, lazy label provider registration
+                       authorization call-out, lazy label provider registration
+pathprobe_security.c   ACL-aware authorization (pathprobe_authorize_query,
+pathprobe_security.h   hypo relation/column checks); SECURITY INVOKER,
+                       delegates SELECT to core ExecCheckPermissions
 tools/pathprobe_report.py   deterministic post-processing (--gate/--advisor/--agent)
 ```
 
@@ -220,12 +223,29 @@ mutating the GUC variables.
 
 ## 11. Security boundary
 
-`propose_acl_gate()` restricts `pathprobe_propose*` (and therefore the
-advisor and hypothetical indexes) to superusers.  Planning-only probing can
-expose statistics for relations the caller may not inspect, so the propose
-surface is superuser-only in this release; observation
-(`pathprobe`/`pathprobe_json`) is unrestricted.  See the README security
-status and [safety-and-limits.md](safety-and-limits.md).
+For a superuser, `pathprobe_propose*` (advisor and hypothetical indexes
+included) keeps full behavior.  For a non-superuser the propose surface runs
+in a restricted, ACL-aware mode implemented in `pathprobe_security.c`
+(SECURITY INVOKER, so `GetUserId()` is the caller):
+
+- exactly one `SELECT` statement (multi-statement and non-`SELECT` refused);
+- `pathprobe_authorize_query()` authorizes every `Query` level via
+  `query_tree_walker` (subqueries, CTEs, sublinks, set-op arms), delegating
+  relation/column `SELECT` to core `ExecCheckPermissions()` over the rewritten
+  `rteperminfos` - no parallel privilege model;
+- fail-closed on row-level security and on any RTE whose `checkAsUser`
+  differs from the caller (a view/rule exposing a base relation the caller
+  cannot select);
+- `hypo_sql` denied; structured hypothetical indexes are btree-only and each
+  target relation must be in the authorized set
+  (`pathprobe_check_hypo_relation`) with per-column `SELECT`
+  (`pathprobe_check_hypo_columns`, table-level SELECT honored first, then
+  `pg_attribute_aclcheck`).
+
+Planner hints change `enable_*` GUCs and are applied only *after*
+authorization succeeds.  Observation (`pathprobe`/`pathprobe_json`) is
+unrestricted.  See the README security status and
+[safety-and-limits.md](safety-and-limits.md).
 
 ## 12. Build modes: stock vs patched PostgreSQL
 
@@ -257,9 +277,12 @@ SQL entry point (pathprobe_json.c)
 
 ```text
 SQL entry point (pathprobe_propose.c)
-  -> ACL gate (superuser)
   -> parse spec JSON
   -> register label provider lazily
+  -> (per statement) analyze + rewrite
+  -> authorize: pathprobe_authorize_query (all Query levels, caller privileges)
+  -> hypo relation + column checks (non-superuser)
+  -> apply planner hints (only after authorization)
   -> install proposed / hypothetical / advisor candidates
   -> run planner (candidates compete in real add_path)
   -> compute candidate fate from recorded events

@@ -55,12 +55,18 @@ safe behavior.
 
 ## Permission boundary
 
-Hypothetical index probing can expose column names and planner statistics.
-`pathprobe_propose*` (and therefore the advisor and `hypo_sql`) is
-superuser-only in this release, as a conservative safety gate.  ACL-aware
-access for non-superuser roles - restricted to queries and relations the
-caller may already inspect - is the target model and is deferred; see the
-roadmap in the README.
+Hypothetical index probing and planner output can expose column names and
+planner statistics.  Superusers get full behavior.  Non-superusers run in a
+restricted, ACL-aware mode: a single `SELECT` probe, every `Query` level
+authorized under the caller's own privileges (relation and column `SELECT`
+delegated to core `ExecCheckPermissions()`), row-level security and
+view/rule `checkAsUser` exposure failing closed, `hypo_sql` denied, and
+structured hypothetical indexes limited to btree on relations and columns the
+caller is authorized for.
+
+Deferred: RLS-compatible mode, owner-level `hypo_sql`, view-safe redaction,
+expression/predicate hypothetical indexes for non-superusers, and a full
+model-based security runner.  See the README roadmap.
 
 ## Build capability
 

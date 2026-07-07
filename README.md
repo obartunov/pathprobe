@@ -20,22 +20,29 @@ answer comes from real PostgreSQL planner competition, not from a separate model
 ## Security status
 
 ```text
-public repository:            OK
-trusted / superuser use:      OK
-untrusted propose/advisor use: blocked until a table-owner/ACL model exists
+public repository:                  OK
+trusted / superuser use:            OK
+non-superuser propose/advisor use:  OK, restricted ACL-aware mode
 ```
 
 `pathprobe_propose` / `pathprobe_propose_json` (and therefore the advisor
-and hypothetical indexes) are **superuser only** in this release.  This is a
-conservative safety default, not the design goal (see Roadmap).  That
-gate is what makes public, trusted use safe today: only superusers can
-reach the propose/advisor surface.
+and hypothetical indexes) run in one of two modes:
 
-The remaining blocker is *widening* that surface to untrusted users.
-"Planning-only" is not harmless - an agent could mass-probe foreign
-tables through the planner - so exposing propose/advisor to non-superusers
-is blocked until an explicit table-owner / ACL model exists.  Observation
-(`pathprobe`, `pathprobe_json`) has no such restriction.
+- **superuser** - full behavior.
+- **non-superuser** - a restricted, ACL-aware mode.  The probe must be a
+  single `SELECT` statement; every `Query` level (subqueries, CTEs, sublinks,
+  set-op arms) is authorized with the caller's own privileges via the core
+  permission check, so only relations and columns the caller may already
+  `SELECT` are reachable.  Relations with row-level security are refused
+  (fail-closed), and a view or rule that would reach a base relation under
+  another role's privileges is refused (fail-closed).  `hypo_sql` is denied;
+  structured hypothetical indexes are btree-only and limited to relations and
+  columns the caller is authorized for.
+
+"Planning-only" is still security-sensitive - planner output can reveal
+relation/index names, row estimates, selectivity, and path competition - so
+the non-superuser mode is deliberately conservative and fails closed.
+Observation (`pathprobe`, `pathprobe_json`) has no such restriction.
 
 
 ## Install
@@ -64,41 +71,23 @@ blanket tracing for every production query.  See
 
 ## Roadmap
 
-### P0 agent usability: ACL-aware propose/advisor
+### Done: ACL-aware propose/advisor (former P0)
 
-Replace the blanket superuser-only gate with ACL-aware checks so that
-non-superuser roles can use pathprobe for queries and relations they are
-already allowed to inspect.  Planning-only is still security-sensitive: the
-query is not executed, but planner output can reveal relation and index
-names, row estimates, selectivity, path competition, and hypothetical index
-usefulness.  That is acceptable for tables the caller may `SELECT`; it is not
-acceptable for tables the caller cannot access.
+The blanket superuser-only gate has been replaced with the ACL-aware model
+described under Security status: a non-superuser may probe queries, relations,
+and columns it can already `SELECT`, with every `Query` level authorized under
+the caller's privileges, RLS and view/rule base exposure failing closed, and
+`hypo_sql` denied.
 
-Proposed first policy:
+### Deferred
 
 ```text
-if superuser:
-    allow current behavior
-else:
-    allow only SELECT queries
-    require SELECT privilege on every referenced relation
-    respect normal caller privileges and RLS / security quals
-    allow structured hypo_indexes only for referenced readable relations
-    disallow hypo_sql unless superuser or table owner
-    advisor may suggest indexes but must not create anything
+RLS-compatible mode          probe RLS relations under the caller's policy
+owner-level hypo_sql         allow hypo_sql for a table owner, not only superuser
+view-safe redaction          probe through a view without exposing its base relation
+expression/predicate hypo    non-superuser hypo beyond plain btree key columns
+model-based security runner  exhaustive model-driven security regression runner
 ```
-
-Tests required before relaxing the gate:
-
-```text
-1. role with SELECT on public_t       -> pathprobe_propose_json OK
-2. role without SELECT on private_t   -> permission denied
-3. role with SELECT but hypo_sql      -> permission denied (non-owner)
-4. superuser                          -> current behavior OK
-5. RLS table                          -> path generated under caller context
-```
-
-Superuser-only is the safe initial rule, not the target model.
 
 ## Where to start
 

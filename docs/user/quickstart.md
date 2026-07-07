@@ -88,11 +88,14 @@ gets a `PathProbe` section with the path-level evidence.
 
 ## Proposed path smoke test
 
-> **Superuser only.**  `pathprobe_propose`, `pathprobe_propose_json`, and the
-> advisor are gated to superusers in this release (planning-only probing can
-> expose statistics for relations the caller may not inspect).  A non-superuser
-> call returns `ERROR: pathprobe: propose/advisor requires superuser` - that is
-> expected, not a broken build.  See the README security status.
+> **Access.**  Superusers get full behavior.  A non-superuser runs in a
+> restricted ACL-aware mode: the probe must be a single `SELECT`, and only
+> relations and columns the caller may already `SELECT` are reachable (every
+> query level is authorized under the caller's privileges).  RLS relations, and
+> views/rules that would reach a base relation under another role, fail closed;
+> `hypo_sql` is denied and structured hypothetical indexes are btree-only on
+> authorized relations and columns.  A privilege violation raises an error -
+> that is expected, not a broken build.  See the README security status.
 
 ```sql
 SELECT pathprobe_propose_json(
