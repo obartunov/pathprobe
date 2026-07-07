@@ -1,5 +1,7 @@
 -- agent-hardening regression: JSON escaping, machine blocks, limits, probe2
-LOAD 'pathprobe';
+SET client_min_messages = warning;
+CREATE EXTENSION IF NOT EXISTS pathprobe;
+RESET client_min_messages;
 
 CREATE TABLE agt (id int, v int);
 INSERT INTO agt SELECT g, g % 100 FROM generate_series(1, 2200) g;

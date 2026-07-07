@@ -1,7 +1,9 @@
 -- ACL-aware access control for pathprobe propose/advisor.
 -- Verifies the SECURITY INVOKER model: non-superusers may probe only queries
 -- and relations they can already inspect; superusers keep full behaviour.
-LOAD 'pathprobe';
+SET client_min_messages = warning;
+CREATE EXTENSION IF NOT EXISTS pathprobe;
+RESET client_min_messages;
 
 -- fixtures
 CREATE TABLE sec_public (id int, v int);

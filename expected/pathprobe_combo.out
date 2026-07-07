@@ -1,7 +1,9 @@
 -- combinatorial invariant test: generate all combinations of candidate
 -- dimensions, run each through pathprobe_propose_json, assert invariants.
 -- Output is counters only (stable under cost drift).
-LOAD 'pathprobe';
+SET client_min_messages = warning;
+CREATE EXTENSION IF NOT EXISTS pathprobe;
+RESET client_min_messages;
 CREATE TABLE combo (id int, v int);
 INSERT INTO combo SELECT g, g % 100 FROM generate_series(1, 2200) g;
 ANALYZE combo;
