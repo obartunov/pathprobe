@@ -21,6 +21,7 @@
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "nodes/nodes.h"
+#include "nodes/nodeFuncs.h"
 #include "utils/acl.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -28,8 +29,15 @@
 
 #include "pathprobe_security.h"
 
-static void authorize_query_recurse(Query *query, Oid caller,
-									PathProbeAccess *access);
+typedef struct AuthWalkCtx
+{
+	Oid			caller;
+	PathProbeAccess *access;
+} AuthWalkCtx;
+
+static void authorize_one_query(Query *query, Oid caller,
+								PathProbeAccess *access);
+static bool authorize_walker(Node *node, AuthWalkCtx *ctx);
 
 /* does this relation have row-level security enabled (catalog flag)? */
 static bool
@@ -56,6 +64,7 @@ void
 pathprobe_authorize_query(List *querytree_list, PathProbeAccess *access)
 {
 	Query	   *query;
+	AuthWalkCtx ctx;
 	Oid			caller = GetUserId();
 
 	access->is_superuser = superuser();
@@ -78,28 +87,25 @@ pathprobe_authorize_query(List *querytree_list, PathProbeAccess *access)
 
 	query = linitial_node(Query, querytree_list);
 
-	if (query->commandType != CMD_SELECT)
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("pathprobe: non-superuser probes are limited to SELECT")));
-
 	/*
-	 * Walk the whole query tree (top level plus every subquery produced by
-	 * view/rule rewriting) and authorize each level.  A plain view expands
-	 * into a subquery RTE whose base relation is not present in the outer
-	 * query's rteperminfos, so a single-level check would miss it.
+	 * Authorize every Query node in the tree using the core walker.  This
+	 * descends into subqueries, CTEs, sublinks, and set-op arms, so a private
+	 * relation reached through any of them is vetted, not just the top-level
+	 * range table.
 	 */
-	authorize_query_recurse(query, caller, access);
+	ctx.caller = caller;
+	ctx.access = access;
+	authorize_one_query(query, caller, access);
+	(void) query_tree_walker(query, authorize_walker, &ctx, 0);
 }
 
 /*
- * Authorize one Query level and recurse into its subqueries.
- *   - core relation/column SELECT via ExecCheckPermissions,
- *   - fail closed on RLS and on any RTE checked as another role,
- *   - collect every RTE_RELATION relid into access->allowed_relids.
+ * authorize_one_query - vet a single Query node (one level).  Called for the
+ * top query and, via query_tree_walker, for every nested Query (subquery,
+ * CTE, sublink, set-op arm), so no relation reachable by the plan is skipped.
  */
 static void
-authorize_query_recurse(Query *query, Oid caller, PathProbeAccess *access)
+authorize_one_query(Query *query, Oid caller, PathProbeAccess *access)
 {
 	ListCell   *lc;
 
@@ -135,12 +141,6 @@ authorize_query_recurse(Query *query, Oid caller, PathProbeAccess *access)
 
 		if (rte->rtekind == RTE_RELATION && OidIsValid(rte->relid))
 		{
-			/*
-			 * SELECT (column-aware) was already vetted by
-			 * ExecCheckPermissions at this level; the checkAsUser guard above
-			 * catches base relations reached as a view owner.  Here we only
-			 * add RLS fail-closed and record the relation.
-			 */
 			if (rel_has_row_security(rte->relid))
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -151,11 +151,29 @@ authorize_query_recurse(Query *query, Oid caller, PathProbeAccess *access)
 			access->allowed_relids = bms_add_member(access->allowed_relids,
 													rte->relid);
 		}
-		else if (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL)
-			authorize_query_recurse(rte->subquery, caller, access);
 	}
 }
 
+/*
+ * authorize_walker - query_tree_walker callback.  Authorizes every Query node
+ * in the tree (top level plus subqueries, CTEs, sublinks, set-op arms) and
+ * recurses.  Using the core walker rather than a hand-rolled descent means we
+ * cannot miss a relation-bearing construct (CTE, correlated subquery, etc.).
+ */
+static bool
+authorize_walker(Node *node, AuthWalkCtx *ctx)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Query))
+	{
+		Query	   *q = (Query *) node;
+
+		authorize_one_query(q, ctx->caller, ctx->access);
+		return query_tree_walker(q, authorize_walker, ctx, 0);
+	}
+	return expression_tree_walker(node, authorize_walker, ctx);
+}
 void
 pathprobe_check_hypo_relation(PathProbeAccess *access, Oid relid, Oid amoid,
 							  bool from_sql)

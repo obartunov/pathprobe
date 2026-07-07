@@ -64,6 +64,12 @@ SELECT 'case8' AS c, sec_try('SELECT * FROM sec_rls', '{"advise":true}');
 SELECT 'case9' AS c, sec_try('SELECT * FROM sec_view', '{"advise":true}');
 -- 11. multi-statement string -> denied (cannot slip through one stmt at a time)
 SELECT 'case11' AS c, sec_try('SELECT * FROM sec_public; SELECT 1', '{"advise":true}');
+-- 12. CTE over private base -> denied (walker descends into cteList)
+SELECT 'case12' AS c, sec_try('WITH c AS (SELECT * FROM sec_private) SELECT * FROM c', '{"advise":true}');
+-- 13. correlated subquery over private -> denied (walker descends into sublink)
+SELECT 'case13' AS c, sec_try('SELECT * FROM sec_public WHERE id IN (SELECT id FROM sec_private)', '{"advise":true}');
+-- 14. CTE over readable base -> OK
+SELECT 'case14' AS c, sec_try('WITH c AS (SELECT * FROM sec_public WHERE v>5) SELECT * FROM c', '{"advise":true}');
 
 RESET ROLE;
 

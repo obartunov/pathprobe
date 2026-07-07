@@ -110,6 +110,27 @@ SELECT 'case11' AS c, sec_try('SELECT * FROM sec_public; SELECT 1', '{"advise":t
  case11 | DENIED
 (1 row)
 
+-- 12. CTE over private base -> denied (walker descends into cteList)
+SELECT 'case12' AS c, sec_try('WITH c AS (SELECT * FROM sec_private) SELECT * FROM c', '{"advise":true}');
+   c    | sec_try 
+--------+---------
+ case12 | DENIED
+(1 row)
+
+-- 13. correlated subquery over private -> denied (walker descends into sublink)
+SELECT 'case13' AS c, sec_try('SELECT * FROM sec_public WHERE id IN (SELECT id FROM sec_private)', '{"advise":true}');
+   c    | sec_try 
+--------+---------
+ case13 | DENIED
+(1 row)
+
+-- 14. CTE over readable base -> OK
+SELECT 'case14' AS c, sec_try('WITH c AS (SELECT * FROM sec_public WHERE v>5) SELECT * FROM c', '{"advise":true}');
+   c    | sec_try 
+--------+---------
+ case14 | OK
+(1 row)
+
 RESET ROLE;
 -- 4. superuser: hypo_sql allowed (current behaviour)
 SELECT 'case4' AS c,
