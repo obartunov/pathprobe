@@ -1914,6 +1914,11 @@ hypo_build_indexoptinfo(PlannerInfo *root, RelOptInfo *rel,
  * rerun create_index_paths(): only new-index paths are generated, and they
  * compete through ordinary add_path() against the existing frontier.  The
  * entry is then appended to the restored indexlist for later planner phases.
+ *
+ * Injection runs from set_rel_pathlist_hook, not get_relation_info_hook as in
+ * HypoPG: pathprobe needs the hypothetical index to enter real add_path()
+ * competition under the active hooks so each resulting path is tagged in the
+ * event log, which the earlier catalog-expansion stage cannot provide.
  */
 static void
 hypo_inject_one(PlannerInfo *root, RelOptInfo *rel,
