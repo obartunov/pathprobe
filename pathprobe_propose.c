@@ -69,9 +69,6 @@
 #include "optimizer/restrictinfo.h"
 #include "parser/parsetree.h"
 #include "utils/ruleutils.h"
-#include "nodes/makefuncs.h"
-#include "nodes/nodeFuncs.h"
-#include "parser/parser.h"
 #include "parser/parse_utilcmd.h"
 #include "commands/defrem.h"
 #include "utils/index_selfuncs.h"
@@ -114,11 +111,11 @@ extern bool pathprobe_log_accepted; /* GUC from pathprobe.c */
 typedef struct ProposedPathSpec
 {
 	/* target */
-	char	   *relname;		/* target base relation name */
+	char	   *relname;
 
 	/* candidate identity */
-	char	   *pathname;		/* stable human name for this candidate */
-	char	   *provider;		/* logical source: "duckdb", "mock", etc. */
+	char	   *pathname;
+	char	   *provider;
 
 	/* cost */
 	Cost		startup_cost;
@@ -130,7 +127,7 @@ typedef struct ProposedPathSpec
 	bool		parameterized;
 	bool		parallel_safe;
 	bool		parallel_aware;
-	int			npathkeys;		/* planner.pathkeys column names */
+	int			npathkeys;
 	char	   *pathkey_cols[PATHPROBE_MAX_HYPO_COLS];
 	int			disabled_nodes; /* base; winner_forbidden adds 1 more */
 
@@ -138,7 +135,7 @@ typedef struct ProposedPathSpec
 	bool		winner_forbidden;	/* add disabled_nodes=1, prevent winning */
 
 	/* runtime */
-	bool		injected;		/* set once this candidate was injected */
+	bool		injected;
 }			ProposedPathSpec;
 
 /* ----------
@@ -166,8 +163,8 @@ typedef struct HypoIndexSpec
 
 	/* full-grammar variant: transformed CREATE INDEX statement (or NULL) */
 	IndexStmt  *stmt;
-	char	   *sql;			/* original statement, for display */
-	Oid			relid;			/* resolved target; authoritative for stmt form */
+	char	   *sql;
+	Oid			relid;
 
 	/* runtime */
 	bool		injected;
@@ -2447,7 +2444,7 @@ pathprobe_propose_internal(const char *query_string,
 
 	report = MemoryContextAlloc(log_mcxt, sizeof(PathProbeReport));
 	report->log = log;
-	report->injected = state.injected;	/* for caller to check */
+	report->injected = state.injected;
 	report->plan_cost = plan_cost;
 	report->baseline_cost = -1.0;
 	report->advise_atoms = state.atoms_str;
