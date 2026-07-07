@@ -2278,7 +2278,8 @@ pathprobe_propose_internal(const char *query_string,
 						   List *specs, List **hypo, bool advise,
 						   bool advise_skip_prefix,
 						   PathProbeOpts *opts,
-						   PathProbeAccess *access)
+						   PathProbeAccess *access,
+						   Jsonb *spec_jb)
 {
 	MemoryContext log_mcxt;
 	PathEventLog *log;
@@ -2288,6 +2289,8 @@ pathprobe_propose_internal(const char *query_string,
 	ListCell   *lc2;
 	double		plan_cost = -1.0;
 	ProposedPathState state;
+	int			hint_nest = 0;
+	bool		hints_applied = false;
 
 	log_mcxt = AllocSetContextCreate(CurrentMemoryContext,
 									 "PathProbeProposedLog",
@@ -2383,6 +2386,19 @@ pathprobe_propose_internal(const char *query_string,
 				}
 			}
 
+			/*
+			 * Apply planner hints only AFTER authorization and the hypo
+			 * checks have passed for this (single, for non-superusers)
+			 * statement: hints change enable_* GUCs, and no GUC-changing
+			 * operation may run before the ACL gate.  Applied once; the nest
+			 * level is closed on every exit path below.
+			 */
+			if (!hints_applied)
+			{
+				hint_nest = propose_apply_hints(spec_jb);
+				hints_applied = true;
+			}
+
 			if (querytree_list != NIL)
 			{
 				Query	   *q = linitial_node(Query, querytree_list);
@@ -2412,6 +2428,8 @@ pathprobe_propose_internal(const char *query_string,
 	}
 	PG_CATCH();
 	{
+		if (hint_nest > 0)
+			AtEOXact_GUC(true, hint_nest);
 		set_rel_pathlist_hook = prev_propose_rel_hook;
 		active_proposal = NULL;
 		pathprobe_active_log = NULL;
@@ -2454,6 +2472,31 @@ pathprobe_propose_internal(const char *query_string,
 				pathprobe_assert_relation_allowed(access, h->relid);
 		}
 	}
+
+	/*
+	 * Baseline cost (benefit denominator) is planned with the injection hooks
+	 * already restored but the hints still active, matching the conditions of
+	 * the counterfactual run.  Ownership of the hint GUC nest level stays
+	 * entirely inside this function: close it on every exit path, including if
+	 * baseline planning throws.
+	 */
+	if (hint_nest > 0)
+	{
+		PG_TRY();
+		{
+			if (*hypo != NIL || advise)
+				report->baseline_cost = propose_baseline_cost(query_string);
+		}
+		PG_CATCH();
+		{
+			AtEOXact_GUC(true, hint_nest);
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
+		AtEOXact_GUC(true, hint_nest);
+	}
+	else if (*hypo != NIL || advise)
+		report->baseline_cost = propose_baseline_cost(query_string);
 
 	return report;
 }
@@ -2514,17 +2557,13 @@ pathprobe_propose(PG_FUNCTION_ARGS)
 	/* Force log_accepted=true so proposed path accepted events are visible */
 	{
 		bool		saved_log_accepted = pathprobe_log_accepted;
-		int			hint_nest = propose_apply_hints(spec_jb);
 
 		pathprobe_log_accepted = true;
+		/* hints + baseline are applied inside, only after authorization */
 		report = pathprobe_propose_internal(query_str, specs, &hypo, advise,
 											spec_get_bool(spec_jb, "advise_skip_prefix"),
-											&opts, &access);
+											&opts, &access, spec_jb);
 		pathprobe_log_accepted = saved_log_accepted;
-		if (hypo != NIL || advise)
-			report->baseline_cost = propose_baseline_cost(query_str);
-		if (hint_nest > 0)
-			AtEOXact_GUC(true, hint_nest);
 	}
 
 	initStringInfo(&out);
@@ -3055,17 +3094,13 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 	/* Force log_accepted=true so proposed path accepted events are visible */
 	{
 		bool		saved_log_accepted = pathprobe_log_accepted;
-		int			hint_nest = propose_apply_hints(spec_jb);
 
 		pathprobe_log_accepted = true;
+		/* hints + baseline are applied inside, only after authorization */
 		report = pathprobe_propose_internal(query_str, specs, &hypo, advise,
 											spec_get_bool(spec_jb, "advise_skip_prefix"),
-											&opts, &access);
+											&opts, &access, spec_jb);
 		pathprobe_log_accepted = saved_log_accepted;
-		if (hypo != NIL || advise)
-			report->baseline_cost = propose_baseline_cost(query_str);
-		if (hint_nest > 0)
-			AtEOXact_GUC(true, hint_nest);
 	}
 
 	/* Retag wp events */

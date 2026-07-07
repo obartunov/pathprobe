@@ -157,6 +157,25 @@ SELECT 'case14' AS c, sec_try('WITH c AS (SELECT * FROM sec_public WHERE v>5) SE
  case14 | OK
 (1 row)
 
+-- 15. hints on an allowed relation -> OK (hints applied only after authorization)
+SELECT 'case15' AS c, sec_try('SELECT * FROM sec_public WHERE v>5',
+                              '{"advise":true,"hints":{"forbid":["indexscan"]}}');
+   c    | sec_try 
+--------+---------
+ case15 | OK
+(1 row)
+
+-- 16. authorization runs BEFORE hint processing: a forbidden relation with a
+--     malformed "hints" value returns DENIED (the ACL error), not the hints
+--     parse error.  If hints were applied before the ACL gate this would
+--     surface as OTHER: "hints must be an object".
+SELECT 'case16' AS c, sec_try('SELECT * FROM sec_private',
+                              '{"advise":true,"hints":"notanobject"}');
+   c    | sec_try 
+--------+---------
+ case16 | DENIED
+(1 row)
+
 RESET ROLE;
 -- 4. superuser: hypo_sql allowed (current behaviour)
 SELECT 'case4' AS c,

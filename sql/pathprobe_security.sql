@@ -81,6 +81,15 @@ SELECT 'case12' AS c, sec_try('WITH c AS (SELECT * FROM sec_private) SELECT * FR
 SELECT 'case13' AS c, sec_try('SELECT * FROM sec_public WHERE id IN (SELECT id FROM sec_private)', '{"advise":true}');
 -- 14. CTE over readable base -> OK
 SELECT 'case14' AS c, sec_try('WITH c AS (SELECT * FROM sec_public WHERE v>5) SELECT * FROM c', '{"advise":true}');
+-- 15. hints on an allowed relation -> OK (hints applied only after authorization)
+SELECT 'case15' AS c, sec_try('SELECT * FROM sec_public WHERE v>5',
+                              '{"advise":true,"hints":{"forbid":["indexscan"]}}');
+-- 16. authorization runs BEFORE hint processing: a forbidden relation with a
+--     malformed "hints" value returns DENIED (the ACL error), not the hints
+--     parse error.  If hints were applied before the ACL gate this would
+--     surface as OTHER: "hints must be an object".
+SELECT 'case16' AS c, sec_try('SELECT * FROM sec_private',
+                              '{"advise":true,"hints":"notanobject"}');
 
 RESET ROLE;
 
