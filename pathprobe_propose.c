@@ -53,6 +53,15 @@
  *   pathprobe_propose_internal() = pathprobe_internal() + proposal injected
  *   via set_rel_pathlist_hook.  A ProposedPathState is stored in a global
  *   (valid only during one planning call) so the hook can find the spec.
+ *
+ * Related layers (separate translation units):
+ *   pathprobe_advisor.c - local single-query index-candidate generation for
+ *     "advise":true; it feeds candidates into this mechanism through
+ *     pathprobe_advise_generate().
+ *   pathprobe_gate.c    - preflight query-load/risk boundary (scaffolding).
+ * This file stays focused on explicit planner hypotheses: candidate/hypo
+ * injection, the ACL boundary, planner interaction, event collection, and
+ * fate/benefit reporting.
  */
 
 #include "postgres.h"
@@ -68,7 +77,6 @@
 #include "utils/guc.h"
 #include "optimizer/restrictinfo.h"
 #include "parser/parsetree.h"
-#include "utils/ruleutils.h"
 #include "parser/parse_utilcmd.h"
 #include "commands/defrem.h"
 #include "utils/index_selfuncs.h"
