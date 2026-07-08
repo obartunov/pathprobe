@@ -1929,6 +1929,12 @@ hypo_inject_one(PlannerInfo *root, RelOptInfo *rel,
 
 	h->ioi = hypo_build_indexoptinfo(root, rel, rte, h);
 
+	/*
+	 * Swap in just the hypothetical index and regenerate index paths.  No
+	 * PG_TRY guard is needed: if create_index_paths() throws, this RelOptInfo
+	 * is discarded with the aborted planning, so the unrestored indexlist
+	 * cannot outlive the error.
+	 */
 	rel->indexlist = list_make1(h->ioi);
 	create_index_paths(root, rel);
 	rel->indexlist = lappend(save, h->ioi);
@@ -2247,6 +2253,14 @@ pathprobe_propose_internal(const char *query_string,
 	state.injected = false;
 	state.winner = false;
 	state.access = access;
+
+	/*
+	 * Single active probe at a time: active_proposal and the saved pathlist
+	 * hook are process-global, so pathprobe_propose_internal is not reentrant.
+	 * Planning does not re-enter a pathprobe SQL function, so this holds; the
+	 * assert catches a future path that would nest one probe inside another.
+	 */
+	Assert(active_proposal == NULL);
 	active_proposal = &state;
 
 	/* Install proposal inject hook (chains probe0) */
