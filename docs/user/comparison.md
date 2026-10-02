@@ -1,9 +1,9 @@
 # Comparison with existing PostgreSQL tools
 
 `pathprobe` is not a replacement for `EXPLAIN`, `auto_explain`,
-`pg_stat_statements`, HypoPG, or `pg_hint_plan`.  Those tools are useful and
-should stay in the PostgreSQL performance toolbox.  `pathprobe` answers a
-different question.
+`pg_stat_statements`, HypoPG, `pg_hint_plan`, or `pg_plan_advice`.  Those
+tools are useful and should stay in the PostgreSQL performance toolbox.
+`pathprobe` answers a different question.
 
 ## The short version
 
@@ -15,6 +15,7 @@ auto_explain        automatic logging of plans for slow statements
 pg_stat_statements  workload-level planning/execution statistics
 HypoPG              hypothetical indexes visible to the planner/EXPLAIN
 pg_hint_plan        user-supplied hints to influence plans
+pg_plan_advice      advice that reproduces or alters planner decisions
 ```
 
 `pathprobe` shows the planner path lifecycle:
@@ -87,6 +88,33 @@ become a hinting system.
 pg_hint_plan  force or influence the planner
 pathprobe     observe planner alternatives and test candidates safely
 ```
+
+## pg_plan_advice
+
+`pg_plan_advice` (contrib, PostgreSQL master) generates and enforces plan
+advice: scan methods, join order, join methods.  It enforces advice by
+restricting the plan strategies the planner may use for a given relation or
+join (`pgs_mask`).
+
+```text
+pg_plan_advice  reproduce or alter planner decisions
+pathprobe       observe how alternatives competed under those decisions
+```
+
+Both can be loaded in the same planning cycle.  How advice shows up in
+`pathprobe` depends on where the restriction applies:
+
+- a disabled scan strategy is still costed, so its paths appear with
+  `disabled_nodes > 0`, and join paths built on them are skipped with
+  `skip_reason: disabled`;
+- a disabled join method is usually not generated at all; `pathprobe`
+  reports the blocked join family as `excluded`.
+
+`pathprobe` reports the effect, not its source: `disabled` and `excluded` look
+the same whether the restriction came from `pg_plan_advice`, an `enable_*`
+setting, or another extension.  `excluded` is also coarse: it is emitted only
+when a whole join family (nested loop, merge, hash) is blocked for a join, so
+disabling a single variant such as memoize or materialize does not produce it.
 
 ## Why we wrote pathprobe
 
