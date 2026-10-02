@@ -15,7 +15,7 @@ consume it. There is no Python dependency.
 
 ## Requirements
 
-- Perl with `PostgreSQL::Test::*` (the in-tree TAP support) and `IPC::Run`.
+- Perl with `PostgreSQL::Test::*` (from the PostgreSQL source tree) and `IPC::Run`.
 - The `pathprobe` extension installed in the tree under test.
 
 Each test brings up its own node with `PostgreSQL::Test::Cluster`, installs the
@@ -25,7 +25,7 @@ core) are used to build specs and decode results.
 
 ## Running the tests
 
-In an in-tree build these run under `make check` / meson like any TAP test:
+The tests are not wired into the Makefile or meson; run them with `prove`:
 
     prove t/010_pathprobe_model_security.pl t/011_pathprobe_model_correctness.pl
 
@@ -38,7 +38,8 @@ install prefix and the usual `PostgreSQL::Test` environment:
     export PP_INSTALL_PATH=/path/to/install
     prove t/010_pathprobe_model_security.pl t/011_pathprobe_model_correctness.pl
 
-`PP_MODE` selects the mode (default `smoke`); `PP_SEED` sets the fuzz seed
+`PP_MODE` selects the mode (default `smoke`; any other value is an error);
+`PP_SEED` sets the fuzz seed
 (default `42`).
 
 ## Test modes

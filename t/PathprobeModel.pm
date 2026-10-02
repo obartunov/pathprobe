@@ -590,17 +590,35 @@ sub _targeted_security {
 }
 
 # generate_security($mode) -> (\@cases, \@skips)
+# Modes accepted by the TAP tests; fuzz is a seeded runtime sample drawn by
+# fuzz_sample(), not a deterministic case set.
+our @MODES = qw(smoke pairwise targeted fuzz);
+
+sub check_mode {
+    my ($mode) = @_;
+    die "unknown model mode '$mode' (expected: @MODES)\n"
+        unless grep { $_ eq $mode } @MODES;
+}
+
+sub _deterministic_mode {
+    my ($mode) = @_;
+    die "mode '$mode' has no deterministic case set (expected: smoke pairwise targeted)\n"
+        unless grep { $_ eq $mode } qw(smoke pairwise targeted);
+}
+
 sub generate_security {
     my ($mode) = @_;
+    _deterministic_mode($mode);
     return ([ mandatory_security_cases() ], []) if $mode eq 'smoke';
     return _targeted_security() if $mode eq 'targeted';
-    return _pairwise_security();          # pairwise / fuzz base
+    return _pairwise_security();
 }
 
 # ---- correctness generation ----------------------------------------------
 
 sub generate_correctness {
     my ($mode) = @_;
+    _deterministic_mode($mode);
     return [ mandatory_correctness_cases() ] if $mode eq 'smoke';
     my @out = mandatory_correctness_cases();
     for my $par (@PARALLELISM) {

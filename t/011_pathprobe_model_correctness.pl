@@ -12,6 +12,7 @@ use PathprobeModel;
 
 my $mode = $ENV{PP_MODE} || 'smoke';
 my $seed = defined $ENV{PP_SEED} ? $ENV{PP_SEED} : 42;
+PathprobeModel::check_mode($mode);
 
 my $node = PostgreSQL::Test::Cluster->new('pp_model_cor',
     $ENV{PP_INSTALL_PATH} ? (install_path => $ENV{PP_INSTALL_PATH}) : ());

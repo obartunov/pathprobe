@@ -4,7 +4,7 @@
 # and fixtures, then runs the security model cases from PathprobeModel.pm and
 # checks OK / DENIED / NO_LEAK / NO_GUC_LEAK.  The model is the source of truth.
 #
-# In an in-tree build this runs under `make check` / meson like any TAP test.
+# Not wired into the Makefile; run with prove.
 # To run standalone against an installed cluster, set PP_INSTALL_PATH and the
 # usual PostgreSQL::Test environment (PERL5LIB, PG_REGRESS, PATH).  PP_MODE
 # selects smoke (default) / pairwise / targeted / fuzz; PP_SEED sets the fuzz
@@ -20,6 +20,7 @@ use PathprobeModel;
 
 my $mode = $ENV{PP_MODE} || 'smoke';
 my $seed = defined $ENV{PP_SEED} ? $ENV{PP_SEED} : 42;
+PathprobeModel::check_mode($mode);
 
 my $node = PostgreSQL::Test::Cluster->new('pp_model_sec',
     $ENV{PP_INSTALL_PATH} ? (install_path => $ENV{PP_INSTALL_PATH}) : ());

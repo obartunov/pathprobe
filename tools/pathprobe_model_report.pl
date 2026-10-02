@@ -20,6 +20,8 @@ while (my $a = shift @ARGV) {
 }
 my $action = $args[0] // 'matrix';
 
+die "--mode fuzz is a seeded runtime sample (PP_MODE=fuzz PP_SEED=N); it has no offline report\n"
+    if $mode eq 'fuzz';
 my ($sec, $skips) = PathprobeModel::generate_security($mode);
 my $cor = PathprobeModel::generate_correctness($mode);
 
