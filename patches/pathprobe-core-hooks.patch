@@ -4,40 +4,40 @@ index 713283a..f68c6d3 100644
 +++ b/src/backend/optimizer/path/joinpath.c
 @@ -987,6 +987,12 @@ try_nestloop_path(PlannerInfo *root,
  	{
- 		/* Waste no memory when we reject a path here */
- 		bms_free(required_outer);
 +		if (pathprobe_path_skipped_hook)
 +			pathprobe_path_skipped_hook(joinrel, T_NestLoop,
 +										workspace.disabled_nodes,
 +										workspace.startup_cost,
 +										workspace.total_cost,
 +										required_outer);
+ 		/* Waste no memory when we reject a path here */
+ 		bms_free(required_outer);
  	}
  }
  
 @@ -1184,6 +1190,12 @@ try_mergejoin_path(PlannerInfo *root,
  	{
- 		/* Waste no memory when we reject a path here */
- 		bms_free(required_outer);
 +		if (pathprobe_path_skipped_hook)
 +			pathprobe_path_skipped_hook(joinrel, T_MergeJoin,
 +										workspace.disabled_nodes,
 +										workspace.startup_cost,
 +										workspace.total_cost,
 +										required_outer);
+ 		/* Waste no memory when we reject a path here */
+ 		bms_free(required_outer);
  	}
  }
  
 @@ -1335,6 +1347,12 @@ try_hashjoin_path(PlannerInfo *root,
  	{
- 		/* Waste no memory when we reject a path here */
- 		bms_free(required_outer);
 +		if (pathprobe_path_skipped_hook)
 +			pathprobe_path_skipped_hook(joinrel, T_HashJoin,
 +										workspace.disabled_nodes,
 +										workspace.startup_cost,
 +										workspace.total_cost,
 +										required_outer);
+ 		/* Waste no memory when we reject a path here */
+ 		bms_free(required_outer);
  	}
  }
  
@@ -151,10 +151,10 @@ index e8db321..00843de 100644
 +extern PGDLLIMPORT pathprobe_path_accepted_hook_type pathprobe_path_accepted_hook;
 +
 +/*
-+ * pathprobe_path_skipped_hook — fires when add_path_precheck() returns false.
++ * Called when add_path_precheck() rejects a join path before construction.
 + * The join path was never constructed (neverborn path event).
-+ * Declared here so pathprobe.so can reference it as extern.
-+ * Defined in joinpath.c.
++ * Defined in pathnode.c, called from joinpath.c.  required_outer is
++ * freed right after the call; a hook must copy it to keep it.
 + */
 +typedef void (*pathprobe_path_skipped_hook_type)(RelOptInfo *joinrel,
 +												 NodeTag     join_pathtype,
