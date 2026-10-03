@@ -166,7 +166,9 @@ If any truncation flag is true, an agent should not make a green decision.
 
 Which decision points this run observes.  The absence of an event is
 evidence only for a covered point: with `add_path_rejected=false`, no
-`rejected` event does not mean nothing was rejected.
+`rejected` event does not mean nothing was rejected.  With
+`index_build=false`, `not_generated` cannot be observed: a hypothetical
+index with no events is `unknown(index_build_not_covered)`.
 
 ```text
 add_path_accepted, add_path_displaced  core hooks patch and pathprobe.log_accepted
@@ -196,4 +198,5 @@ index_build                            core hooks patch with the index path
 ```
 
 Summary rows are useful for search-shape analysis.  They should not be used as a
-replacement for labeled candidate events.
+replacement for labeled candidate events.  There is no displaced column; count
+`displaced` events in `events[]`.

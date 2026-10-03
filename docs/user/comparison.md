@@ -25,7 +25,9 @@ which paths were considered
 which paths were skipped
 which paths were rejected
 which paths entered the frontier
+which accepted paths were later displaced
 which paths survived
+whether a hypothetical index produced any index path at all
 which proposed / hypothetical / advisor candidates affected the decision
 ```
 
@@ -47,9 +49,9 @@ pathprobe  what happened to competing paths before the final plan existed?
 ```
 
 `EXPLAIN` may show that a Seq Scan survived into the final plan.  `pathprobe`
-may also show that an IndexPath was generated, accepted, then rejected, that a
-BitmapHeapPath was skipped by precheck, or that a proposed CustomPath survived
-only when `winner_forbidden=true`.
+may also show that an IndexPath was generated and rejected, or accepted and
+later displaced, that a join path was skipped by precheck, or that a proposed
+CustomPath survived only when `winner_forbidden=true`.
 
 ## auto_explain
 
@@ -73,10 +75,18 @@ then `pathprobe` to inspect the planner path lifecycle for it.
 HypoPG is the closest tool in spirit for hypothetical indexes: create virtual
 indexes and check whether PostgreSQL would use them.  `pathprobe` does not
 replace that idea; it ties a hypothetical candidate to path events - was it
-injected, accepted, rejected, did it survive, did it appear in the final plan,
-what was the query-level benefit.  For agent workflows that evidence matters:
-an agent should not merely say "create this index" but show that the candidate
-changed planner competition.
+injected, was an index path generated at all, was it accepted, rejected or
+displaced, did it appear in the final plan, what was the query-level benefit.
+
+HypoPG can show whether a hypothetical index appears in a final plan.
+pathprobe can also show that a hypothetical index was examined but generated
+no IndexPath (`not_generated`, with a reason such as `no_leading_clause`),
+which needs the core patch with the index path hook.  It does not do this for
+real indexes, and an index skipped before path generation (an unproven
+partial predicate) is reported as `not_examined`, not `not_generated`.
+
+For agent workflows that evidence matters: an agent should not merely say
+"create this index" but show that the candidate changed planner competition.
 
 ## pg_hint_plan
 
@@ -126,14 +136,14 @@ custom path really survived competition, whether the planner search itself is
 growing too large, and whether to execute, route, delay, or reject.
 
 Existing tools answer parts of this; none provides a single machine-readable
-path lifecycle model for agent gating:
+path lifecycle model:
 
 ```text
 planner events
   -> path lifecycle
   -> JSON evidence
   -> advisor / hypothetical / proposed candidates
-  -> agent gate decision
+  -> evidence for a decision made by a policy outside pathprobe
 ```
 
 The goal is not to replace PostgreSQL's optimizer, but to make its decisions

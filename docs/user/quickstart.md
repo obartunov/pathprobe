@@ -64,7 +64,9 @@ SELECT pathprobe('SELECT * FROM t WHERE id = 42');
 ```
 
 Read the output as a path lifecycle log.  A path may be built and rejected, or it
-may never be built at all.
+may never be built at all.  Accepted and displaced events need
+`SET pathprobe.log_accepted = on` (superuser); the `coverage` object in the
+JSON says which decision points a run observed.
 
 ## Machine-readable probe
 
@@ -95,7 +97,7 @@ gets a `PathProbe` section with the path-level evidence.
 > views/rules that would reach a base relation under another role, fail closed;
 > `hypo_sql` is denied and structured hypothetical indexes are btree-only on
 > authorized relations and columns.  A privilege violation raises an error -
-> that is expected, not a broken build.  See the README security status.
+> that is expected, not a broken build.  See the README security model.
 
 ```sql
 SELECT pathprobe_propose_json(
@@ -123,4 +125,9 @@ SELECT pathprobe_propose_json(
 ```
 
 The advisor derives hypothetical index candidates, plans the query with them,
-and reports which fake indexes were actually used by the final plan.
+and reports for each one a `fate` (was an index path generated at all, and
+what happened to it in `add_path()`) and `in_plan` (used by the final plan).
+
+## Next
+
+Runnable stories with structural checks: [docs/examples](../examples/README.md).

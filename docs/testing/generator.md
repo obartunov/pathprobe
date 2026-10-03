@@ -1,9 +1,12 @@
 # Generated combinatorial tests
 
-`pathprobe_combo.sql` is the right direction: it enumerates candidate dimensions,
-runs `pathprobe_propose_json()`, and checks invariants instead of costs.
+`sql/pathprobe_combo.sql` enumerates candidate dimensions in a hand-written
+PL/pgSQL loop, runs `pathprobe_propose_json()`, and checks invariants instead of
+costs.  `tools/gen_pathprobe_tests.py` generates the same kind of SQL from an
+explicit matrix; its smoke output is the `pathprobe_combo_generated` slice.
 
-The next step is to generate that SQL from an explicit matrix.
+The SQL-level invariants in both must stay in step with the Perl TAP model
+oracle (`t/PathprobeModel.pm`, see `model-based-tests.md`).
 
 ## Why generate
 
@@ -43,18 +46,19 @@ permission_mode
 
 ## Output shape
 
-The generator writes:
-
-```text
-sql/pathprobe_combo_generated.sql
-expected/pathprobe_combo_generated.out
-docs/testing/generated-matrix.md
+```sh
+python3 tools/gen_pathprobe_tests.py --mode smoke \
+  --sql-out sql/pathprobe_combo_generated.sql \
+  --expected-out expected/pathprobe_combo_generated.out \
+  --matrix-out docs/testing/generated-matrix-smoke.md
 ```
 
-The SQL output should print counters only:
+`--mode` is `smoke`, `pairwise` or `full`; `--list-cases` prints case names.
+The committed SQL differs from the generator output only in its header
+(`CREATE EXTENSION` instead of `LOAD`).  The SQL prints counters only:
 
 ```text
-NOTICE:  combinatorial generated: 128 cases, 0 failures
+NOTICE:  combinatorial generated smoke: 8 cases, 0 failures
 ```
 
 The expected file should remain stable under cost drift.
@@ -69,7 +73,7 @@ candidate fate belongs to allowed alphabet
 candidate injected iff target relation is present
 injected=false => target_not_found
 target_not_found / not_examined => no accepted/rejected/survived/displaced events
-survived <= accepted
+survived <= accepted, displaced <= accepted (where acceptance is covered)
 hypo in_plan => injected
 hypo survived <= accepted
 hypo fate belongs to the hypo alphabet, and is not inconsistent

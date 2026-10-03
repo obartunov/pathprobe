@@ -24,8 +24,12 @@ pc  precheck-stage observation
 p1  add_path() observation
 p0  base-relation frontier snapshot
 j2  join-level setup/pathlist observation
-wp  proposed/hypothetical path observation
+wp  proposed candidate (CustomScan) observation
 ```
+
+Hypothetical index paths are observed by the regular adapters and carry a
+`hypo:<name>` label; `build_index_paths()` decisions for them come from the
+core index path hook and are summarized in `hypo_indexes[]`, not as events.
 
 The patched PostgreSQL build exposes more lifecycle stages than a stock build.
 Documentation and tests should distinguish capability, not pretend all builds

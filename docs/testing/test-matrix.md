@@ -18,7 +18,8 @@ json escaping
 candidate fate alphabet
 injected vs target relation
 not-injected consistency (target_not_found)
-survived <= accepted
+target_not_found / not_examined carry no events
+survived <= accepted, displaced <= accepted (coverage-conditioned)
 hypo in_plan -> injected
 hypo fate alphabet and not-generated/not-injected consistency
 advisor block completeness

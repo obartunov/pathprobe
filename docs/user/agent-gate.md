@@ -1,20 +1,20 @@
-# Planner-aware gate for SQL agents
+# Planner evidence for agent preflight
 
-A SQL agent should not execute every generated query immediately.  It should
-first ask PostgreSQL how hard the query looks and whether there is a safer path.
-
-`pathprobe` provides planner evidence for that decision.
+A SQL agent, a migration checker or a CI job may want to look at a query before
+running it.  `pathprobe` provides structured planner evidence for that step:
+evidence for a deterministic policy.  It does not provide the policy, and it is
+not itself a gate.
 
 ## Flow
 
 ```text
 agent builds SQL
       ↓
-pathprobe_propose_json(..., advisor/proposed/hypo spec)
+pathprobe_json(...) / pathprobe_propose_json(..., advisor/proposed/hypo spec)
       ↓
 JSON evidence
       ↓
-deterministic policy
+deterministic policy (outside pathprobe)
       ↓
 execute / route / defer / refuse / suggest index
 ```
@@ -37,29 +37,41 @@ SELECT pathprobe_propose_json(
 )::jsonb;
 ```
 
-## Fields an agent should read
+## Fields a policy can read
 
 ```text
-limits.events_truncated
+coverage                     which decision points were observed; an absent
+                             event is evidence only for a covered point
+limits.events_truncated      the event log hit its cap: evidence incomplete
 limits.summary_truncated
 advisor.enabled
 advisor.truncated
 advisor.query_level_benefit
+hypo_indexes[].fate          not_examined / not_generated / rejected /
+                             displaced / survived / unknown ...
+hypo_indexes[].index_build   build_index_paths() calls and outcome, or null
 hypo_indexes[].in_plan
 hypo_indexes[].ddl
 candidates[].fate
 candidates[].gap
 candidates[].event_counts
-summary[].accepted / rejected / skipped / survived
+summary[].accepted / rejected / skipped / survived / excluded
+events[] with kind excluded  join strategies removed before generation
 ```
 
-## Minimal deterministic policy
+`unknown`, `unknown_after_accept` and `inconsistent` fates, and any truncation,
+are not green: they mean the evidence does not decide the question.
+
+## An illustrative policy
+
+The rules below show the shape of a policy over this evidence.  They are an
+example, not a recommendation and not part of `pathprobe`; thresholds, plan
+cost limits and relation sizes come from the operator.
 
 ```text
 GREEN
-  no truncation
+  no truncation, no coverage gap that matters for the question
   low plan cost
-  no dominant in_plan advisor candidate
   execute normally
 
 YELLOW
@@ -69,19 +81,19 @@ YELLOW
 RED
   truncation occurred
   very high cost
-  dominant advisor index is in_plan
+  a hypothetical index survives and is in_plan with a large benefit
   many join-pressure events
   refuse/defer/suggest index instead of running on primary
 ```
 
-This is deliberately simple.  The LLM may propose a query, but the gate decision
-should be based on machine-readable evidence.
+[Example 6](../examples/06-agent-preflight.md) computes such evidence in SQL
+and applies a small policy of this kind.
 
 ## Boundary
 
 ```text
 LLM / agent  proposes or asks
-pathprobe    measures real planner competition
+pathprobe    reports what the planner did, and what it did not observe
 policy       decides using deterministic rules
 PostgreSQL   executes only if policy allows it
 ```

@@ -48,6 +48,29 @@ survived  path was present in an observed frontier
 displaced previously accepted path was pushed out
 ```
 
+## Absent events
+
+Four different reasons can leave a target without events, and the fates keep
+them apart:
+
+```text
+target_not_found  spec/identity failure: the spec names no relation of the
+                  query
+not_examined      the target is known, but the decision point was not reached
+                  (relation removed before planning; partial index predicate
+                  not implied, so build_index_paths() is never called)
+not_generated     hypothetical indexes only: build_index_paths() was called
+                  and built no path
+unknown           missing observation: the point that would decide is not
+                  covered in this run, or the outcome is not attributed
+```
+
+`not_examined` and `not_generated` are claimed only from a positive
+observation (the relation was not planned; no build call happened while the
+index-build point is covered).  When the point is not covered the result is
+`unknown`, for example with `coverage.index_build = false`, which makes
+`not_generated` unobservable.
+
 ## Candidate fate
 
 A missing event is not lifecycle evidence.  The fate of a labeled proposed
@@ -82,7 +105,11 @@ indicates a probe bug or an unmodeled planner action.  Tools should treat
 
 A hypothetical index yields several paths, so its fate aggregates the labeled
 events of all of them at its relation, after the build_index_paths()
-decision reported by the core index path hook.
+decision reported by the core index path hook.  The hook records only
+pathprobe's hypothetical indexes (matched by their IndexOptInfo); real
+indexes are not logged.  In JSON the state is `fate`, and the parenthesized
+detail is `fate_reason` (for `not_examined` and `unknown`) or
+`index_build.not_generated` (for `not_generated`).
 
 ```text
 target_not_found      no relation for it in the query

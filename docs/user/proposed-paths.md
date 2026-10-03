@@ -4,7 +4,7 @@
 > restricted ACL-aware mode: a single `SELECT` probe over relations and columns
 > the caller may already `SELECT` (all query levels authorized under the
 > caller's privileges; RLS and view/rule base exposure fail closed).  See the
-> README security status.
+> README security model.
 
 Proposed paths let a user or tool inject a diagnostic candidate into real
 PostgreSQL planner competition.
@@ -33,6 +33,9 @@ target.relname       base relation targeted by the candidate
 candidate.pathname   candidate identity; must be unique in multi-candidate calls
 candidate.provider   human/tool label
 cost.total_cost      cost used in planner competition
+planner.parallel_safe default true; add_path() never rejects a parallel-safe
+                     path in favour of a non-parallel-safe one, so set false
+                     to compete on cost alone against non-parallel-safe paths
 mode.winner_forbidden prevent diagnostic candidate from becoming executable winner
 ```
 
@@ -55,9 +58,21 @@ unknown_after_accept     accepted, later outcome not observed
 inconsistent             events contradict an observed decision point
 ```
 
+Three of these have no events at all and still mean different things:
+
+```text
+target_not_found  spec/identity failure: the spec names no relation of the query
+not_examined      the target is known, but planning never reached the point
+                  where the candidate is injected
+unknown           the candidate was injected; the decision point that would
+                  report its outcome is not covered in this run
+```
+
 A fate is never inferred from a missing event; see `coverage` in
-`docs/technical/json-format.md`.  For tools, `inconsistent` is not a normal
-outcome: it means either a probe bug or an unmodeled planner action.
+`docs/technical/json-format.md` and
+[example 3](../examples/03-target-not-found-not-examined-unknown.md).  For
+tools, `inconsistent` is not a normal outcome: it means either a probe bug or
+an unmodeled planner action.
 
 ## Policy boundary
 

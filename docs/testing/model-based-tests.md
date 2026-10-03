@@ -97,8 +97,11 @@ a `coverage` object is present; per-candidate `survived <= accepted` and
 `displaced <= accepted` where acceptance is covered; `target_not_found` and
 `not_examined` imply zero event counts; `fate` within `{target_not_found,
 not_examined, unknown, rejected, unknown_after_accept, survived_at_point,
-survived, displaced, survived_upper}`; hypo `in_plan` implies `injected` and `survived <=
-accepted`; hypo `fate` within its alphabet and not `inconsistent`, zero counts for `target_not_found`,
+survived, displaced, survived_upper}` (`inconsistent` is public but fails the
+check); hypo `in_plan` implies `injected` and `survived <=
+accepted`; hypo `fate` within `{target_not_found, not_examined, not_generated,
+rejected, displaced, survived_at_point, survived, unknown, inconsistent}` and not
+`inconsistent` (a separate failing check), zero counts for `target_not_found`,
 `not_examined` and `not_generated`, not injected implies `target_not_found` or
 `not_examined`, and `index_build` present exactly when `coverage.index_build`;
 `advisor.enabled` implies `baseline_cost` and `plan_cost` with

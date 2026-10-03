@@ -15,25 +15,42 @@ displaced a previously accepted Path was pushed out by a later competitor
 ```
 
 These are not synonyms.  They name different stages of path elimination.
+Accepted is not survived: an accepted path can be displaced later.
 
 ## Example
 
+Summary rows of a two-table join (from
+[example 1](../examples/01-explain-is-not-enough.md)):
+
 ```text
-{1}  SeqScan        accepted=1  survived=1  best=145.00
-{1}  IndexScan      rejected=1  survived=0
-{1}  BitmapHeapScan accepted=1  displaced=1 survived=0
+  rel           strategy             excl  skip  rej  acc  surv  best_cost
+  {1,2}         MergeJoin               0     3    1    2     0           -
+  {1,2}         NestLoop                0    11    4    1     0           -
+  {1,2}         HashJoin                0     1    0    1     2      380.47
 ```
 
 A plain reading:
 
 ```text
-SeqScan survived.
-IndexScan was built, but lost.
-BitmapHeapScan entered the frontier, then was later displaced.
+HashJoin survived.
+MergeJoin was built and accepted twice, and is not among the survivors:
+  both were displaced (the events show DISPLACED); one more was rejected,
+  three were skipped by precheck before a Path existed.
+NestLoop: accepted once and displaced, rejected four times, skipped eleven.
 ```
 
-This is different from saying "PostgreSQL did not consider the index".  If an
-`IndexScan` has a `rejected` event, PostgreSQL did consider it.
+This is different from saying "PostgreSQL did not consider a merge join".
+A `rejected` or `displaced` event means the path was built.  The summary has
+no displaced column; count DISPLACED events in `events[]`.
+
+## Coverage
+
+An absent event is evidence only where the run covers that decision point;
+the JSON `coverage` object says which ones are covered.  `accepted` and
+`displaced` events are recorded only with `pathprobe.log_accepted = on`
+(the propose functions turn it on), so in a plain `pathprobe()` run without
+it, "no accepted event" says nothing.  See
+[json-format](../technical/json-format.md#coverage).
 
 ## Sources
 
@@ -44,8 +61,11 @@ pc  precheck stage, before a materialized Path exists
 p1  add_path() stage, after a Path was built
 p0  base-relation frontier snapshot
 j2  join-level pre-generation / pair-local frontier observation
-wp  proposed path or hypothetical path event
+wp  proposed candidate (CustomScan) event
 ```
+
+Hypothetical index paths keep their source (`p1`, or the frontier check after
+injection) and carry a `hypo:<name>` label.
 
 The same path strategy may disappear at different sources.  That is the point of
 the tool.

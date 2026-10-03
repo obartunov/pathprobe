@@ -16,13 +16,14 @@ pathprobe.c            _PG_init, GUCs, hook installation, event log,
 pathprobe.h            shared structs (PathEvent, PathEventLog,
                        PathProbeReport), enums, label provider API, GUC externs
 pathprobe_probe1.c     add_path/precheck lifecycle instrumentation
-                       (accepted/rejected/skipped/survived attribution)
+                       (accepted/rejected/displaced/skipped attribution)
 pathprobe_probe2.c     join-level observation
 pathprobe_json.c       observation wrappers pathprobe()/pathprobe_json()
                        and the machine-readable JSON renderer
 pathprobe_propose.c    pathprobe_propose()/pathprobe_propose_json();
-                       CustomPath injection, candidate fate FSM,
-                       hypothetical indexes, advisor, pathkeys claim,
+                       CustomPath injection, candidate and hypothetical
+                       index fate, index-build hook consumer, hypothetical
+                       indexes, advisor, pathkeys claim,
                        authorization call-out, lazy label provider registration
 pathprobe_security.c   ACL-aware authorization (pathprobe_authorize_query,
 pathprobe_security.h   hypo relation/column checks); SECURITY INVOKER,
@@ -54,6 +55,12 @@ stock-available hooks are installed (reduced coverage).  probe2's join-level
 hooks are always installed; the `pathprobe.enable_probe2` GUC gates their
 work inside the hook body, so toggling it at runtime is safe.
 
+The core patch's `pathprobe_index_path_hook` is not installed here: the
+propose entry point sets it for the duration of one probe and restores it
+afterwards (also on error).  It is compiled in only when the server headers
+define `HAVE_PATHPROBE_INDEX_PATH_HOOK`, so an older copy of the core patch
+still builds, without index-build coverage.
+
 `_PG_init` never references the propose layer: the path label provider is
 registered lazily from the propose entry points (section 6), keeping
 `_PG_init` free of propose knowledge.
@@ -80,8 +87,11 @@ pathprobe.max_query_length
 ```text
 PathEvent         one path life event: kind, source, origin, relids,
                   pathtype, costs, optional label
-PathEventKind     SKIPPED / REJECTED / ACCEPTED / DISPLACED / SURVIVED
+PathEventKind     SKIPPED / REJECTED / ACCEPTED / DISPLACED / SURVIVED /
+                  EXCLUDED
 PathEventLog      the per-run event buffer + relids pool + truncation flag
+                  + coverage (PP_COV_* bits, fixed when the log is created;
+                  the propose entry point adds PP_COV_INDEX_BUILD)
 PathProbeReport   log + summary + advisor fields returned to the renderers
 ```
 
@@ -95,10 +105,12 @@ aggregates events per relation, bounded by `max_summary_entries` with a
 
 ```text
 probe0  set_rel_pathlist_hook: survivors visible without the core patch
-probe1  pathprobe_probe1.c: add_path frontier - PEK_REJECTED (displaced or
-        losing), PEK_ACCEPTED (entered frontier, off by default), and
-        precheck PEK_SKIPPED; each event asks pathprobe_path_label() for an
-        optional label
+probe1  pathprobe_probe1.c: add_path frontier - PEK_REJECTED (lost to an
+        existing path), PEK_ACCEPTED (entered the pathlist) followed by one
+        PEK_DISPLACED per path it removed (from the dominated list the core
+        patch keeps alive until the hook returns), both only with
+        pathprobe.log_accepted, and precheck PEK_SKIPPED; each event asks
+        pathprobe_path_label() for an optional label
 probe2  pathprobe_probe2.c: join-level observation (setup/pathlist/search),
         gated by pathprobe.enable_probe2
 ```
@@ -121,23 +133,18 @@ Lazy label registration: each propose entry point calls
 probe1 then attributes `hypo:<name>` / candidate labels through the accessor
 without pathprobe.c depending on propose symbols.
 
-Candidate fate FSM (`CandFateState`, `propose_candidate_fsm`): six states -
-`CAND_INJECTED`, `CAND_ACCEPTED`, `CAND_REJECTED`, `CAND_SURVIVED`,
-`CAND_UPPER`, `CAND_ILLEGAL`.  It replays the candidate's own path events
-(matched by label) in order:
-
-```text
-INJECTED --PEK_ACCEPTED(base rel)--> ACCEPTED
-ACCEPTED --PEK_SURVIVED-------------> SURVIVED
-{ACCEPTED,SURVIVED,UPPER} --PEK_ACCEPTED(upper: empty relids)--> UPPER
-INJECTED --PEK_REJECTED-------------> REJECTED
-any other transition ---------------> ILLEGAL (records the offending seq)
-```
-
-`CAND_ILLEGAL` is the enum state for an impossible transition; it renders as
-`inconsistent` (JSON) / `INCONSISTENT (illegal transition)` (text).  Fate is
-derived purely from recorded events, and is reported unreliable when the
-event log was truncated.
+Candidate fate (`CandFate`, `propose_candidate_fate()`): replays the
+candidate's own events (matched by label) in order, together with the log's
+coverage.  Not injected gives `CAND_TARGET_NOT_FOUND` or `CAND_NOT_EXAMINED`
+(the relation is in the query: `target_in_query`); otherwise REJECTED,
+ACCEPTED, SURVIVED and DISPLACED at the base rel and ACCEPTED at an upper rel
+give `rejected`, `displaced`, `survived` (or `survived_at_point` when
+displacement is not covered), `survived_upper`, `unknown_after_accept` or
+`unknown`.  A sequence that contradicts a covered point is `CAND_ILLEGAL`,
+rendered `inconsistent` (JSON) / `INCONSISTENT (illegal transition)` (text),
+with the offending seq.  A missing event never moves the state.  The text
+card, `candidates[]` and the legacy top-level fate use this one function.
+Fate is reported unreliable when the event log was truncated.
 
 ## 7. Hypothetical indexes
 
@@ -145,6 +152,14 @@ event log was truncated.
 `hypo_sql` (full `CREATE INDEX` grammar, real parser).  Hypothetical index
 paths carry `hypo:<name>` labels and participate in normal `add_path`
 competition; none is ever built on disk.
+
+`hypo_index_build_hook()` receives every `build_index_paths()` decision
+during the probe and records those for a hypothetical index (pointer match
+on the `IndexOptInfo` pathprobe built): calls per call site (plain,
+non-native SAOP bitmap, OR arm), calls that generated paths, and the reasons
+of the empty ones.  `hypo_fate()` combines that with the labeled events at
+the relation the index was injected into (matched by planner relids) and
+with coverage; see `event-model.md`.
 
 ### AM support (btree, gin, gist, brin, spgist)
 
@@ -201,10 +216,12 @@ cost-model of its own.
 
 `pathprobe_json.c` renders the machine-readable output: `events` (with
 `label` and `origin`), `summary`, `limits`, and, for the propose entry
-points, `candidates[]`, `advisor`, and `hypo_indexes[]` (with explicit
-`in_plan` boolean and `event_counts`).  All string fields go through a single
-escaper (`pathprobe_json_str`) so arbitrary query text and identifiers are
-safely encoded.
+points, `candidates[]` (with `fate` and `event_counts`), `advisor`, and
+`hypo_indexes[]` (with `in_plan`, event counts, `fate`, `fate_reason` and
+`index_build`), plus `coverage`.  User-controlled JSON strings must be
+rendered with `pathprobe_json_str`: query text, identifiers, candidate names
+and target names use this escaper.  Keep this invariant for any new JSON
+string field.
 
 ## 10. Limits and truncation
 
@@ -244,7 +261,7 @@ in a restricted, ACL-aware mode implemented in `pathprobe_security.c`
 
 Planner hints change `enable_*` GUCs and are applied only *after*
 authorization succeeds.  Observation (`pathprobe`/`pathprobe_json`) is
-unrestricted.  See the README security status and
+unrestricted.  See the README security model and
 [safety-and-limits.md](safety-and-limits.md).
 
 ## 12. Build modes: stock vs patched PostgreSQL
@@ -257,6 +274,8 @@ stock PostgreSQL
 patched PostgreSQL (patches/pathprobe-core-hooks.patch)
   full add_path/precheck lifecycle observation via probe1
   built with -DHAVE_PATHPROBE_HOOKS
+  build_index_paths() decisions for hypothetical indexes, when the server
+  headers define HAVE_PATHPROBE_INDEX_PATH_HOOK
 ```
 
 `_PG_init` selects the installed hook set with `#ifdef HAVE_PATHPROBE_HOOKS`.
@@ -284,7 +303,9 @@ SQL entry point (pathprobe_propose.c)
   -> hypo relation + column checks (non-superuser)
   -> apply planner hints (only after authorization)
   -> install proposed / hypothetical / advisor candidates
-  -> run planner (candidates compete in real add_path)
-  -> compute candidate fate from recorded events
+  -> run planner (candidates compete in real add_path; the index path hook
+     records build decisions for hypothetical indexes)
+  -> compute candidate and hypothetical index fate from recorded events
+     and coverage
   -> emit JSON evidence
 ```

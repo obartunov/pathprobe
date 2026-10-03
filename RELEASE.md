@@ -14,4 +14,4 @@ observability, propose/advisor/hypo, tools, tests, docs.  Each commit
 builds, installs, and passes its own installcheck slice.
 
 Security boundary before enabling propose/advisor for untrusted users:
-see README "Security status" and docs/technical/safety-and-limits.md.
+see README "Security model" and docs/technical/safety-and-limits.md.

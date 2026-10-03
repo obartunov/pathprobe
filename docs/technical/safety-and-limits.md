@@ -64,9 +64,11 @@ view/rule `checkAsUser` exposure failing closed, `hypo_sql` denied, and
 structured hypothetical indexes limited to btree on relations and columns the
 caller is authorized for.
 
-Deferred: RLS-compatible mode, owner-level `hypo_sql`, view-safe redaction,
-expression/predicate hypothetical indexes for non-superusers, and a full
-model-based security runner.  See the README roadmap.
+Not supported yet: RLS-compatible mode, owner-level `hypo_sql`, view-safe
+redaction, and expression/predicate hypothetical indexes for non-superusers.
+The security boundary is exercised by the Perl TAP model tests
+(`t/010_pathprobe_model_security.pl`, see
+`docs/testing/model-based-tests.md`).
 
 ## Build capability
 

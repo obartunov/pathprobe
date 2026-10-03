@@ -4,7 +4,7 @@
 > behavior; non-superusers run in the restricted ACL-aware mode (single
 > `SELECT`; only relations and columns the caller may already `SELECT`; RLS and
 > view/rule base exposure fail closed; `hypo_sql` denied; structured btree hypo
-> only, on authorized relations and columns).  See the README security status.
+> only, on authorized relations and columns).  See the README security model.
 
 Advisor mode asks a narrow question:
 
@@ -45,8 +45,44 @@ hypo_indexes[].fate            not_examined / not_generated / rejected /
 hypo_indexes[].index_build     build_index_paths() calls and outcome, or null
 ```
 
-A tool should treat `hypo_indexes[].in_plan = true` as stronger evidence than
-"candidate was generated".  Generated-but-not-used indexes are usually noise.
+A hypothetical index goes through separate stages, and each has its own
+evidence:
+
+```text
+advisor candidate generated   the advisor derived the index from the query
+                              (advisor.atoms); says nothing about the planner
+hypo index injected           injected=true: pathprobe offered it to the
+                              relation's index list
+IndexPath generated           index_build.generated > 0: build_index_paths()
+                              built at least one path over it; otherwise
+                              fate not_examined or not_generated
+path accepted / rejected /    accepted, rejected, displaced, survived counts
+  displaced / survived        and the fate derived from them
+in_plan                       the final plan uses the index
+```
+
+Injected is not generated, and generated is not accepted.  `fate` and
+`fate_reason` (see `docs/technical/event-model.md`) summarize the stages:
+
+```text
+not_examined(rel_not_planned | predicate_not_implied)
+not_generated                 reasons in index_build.not_generated:
+                              no_useful_input, no_leading_clause,
+                              scantype_unsupported
+rejected / displaced / survived / survived_at_point
+unknown(index_build_not_covered | predicate_not_implied | outcome_not_observed)
+target_not_found
+```
+
+`not_generated` needs `coverage.index_build`, which requires the core patch
+with the index path hook.  Without it, a hypothetical index with no events
+is `unknown(index_build_not_covered)`.  The hook records only pathprobe's
+hypothetical indexes; real indexes are not logged.
+
+A tool should treat `in_plan = true` as the strongest of these.  Generated
+but not used indexes are usually noise.  See
+[example 4](../examples/04-not-generated-index-path.md) and
+[example 5](../examples/05-hypothetical-index-lifecycle.md).
 
 ## Supported advisor shapes
 
@@ -118,8 +154,9 @@ ordering, opclasses, and non-btree AMs where supported by the code path.
 ## Practical reading rule
 
 ```text
-advisor generated candidate  weak evidence
-candidate accepted/rejected   planner saw it
+advisor generated candidate   weak evidence
+fate not_generated            the planner examined it and built no path
+candidate accepted/rejected   a path over it competed
 candidate in_plan=true        strongest local evidence for this query
 large query_level_benefit     useful signal, not an automatic DDL decision
 ```
