@@ -9,7 +9,7 @@ SET pathprobe.log_accepted = on;
 
 DROP TABLE IF EXISTS ex6_events;
 CREATE TABLE ex6_events (id int PRIMARY KEY, account int, kind int, payload text);
-INSERT INTO ex6_events SELECT g, g % 2000, g % 7, repeat('p', 60) FROM generate_series(1, 50000) g;
+INSERT INTO ex6_events SELECT g, g % 2000, g % 7, repeat('p', 60) FROM generate_series(1, 30000) g;
 ANALYZE ex6_events;
 
 -- Evidence about the query as it would be planned now.  Every field comes

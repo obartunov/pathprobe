@@ -8,7 +8,7 @@ cannot read from EXPLAIN?
 
 ## Setup
 
-`examples/06_agent_preflight.sql`: `ex6_events` (50000 rows, primary key
+`examples/06_agent_preflight.sql`: `ex6_events` (30000 rows, primary key
 only) and two helper functions written in SQL over the JSON:
 
 ```text
@@ -38,7 +38,7 @@ remedies  {"hypo": [{"fate": "survived",         "name": "by_account", "in_plan"
                     {"fate": "target_not_found", "name": "typo",       "in_plan": false}],
            "index_build_covered": true}
 
-evidence  {"skipped": 5, "excluded": ["MergeJoin"], "displaced": 2,
+evidence  {"skipped": 4, "excluded": ["MergeJoin"], "displaced": 3,
 (self-    "truncated": false, "seqscan_only": ["a"],
  join)     "coverage_gaps": ["index_build"]}
 ```
