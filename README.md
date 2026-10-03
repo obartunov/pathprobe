@@ -160,7 +160,7 @@ indexes are not.  See [advisor and hypothetical indexes](docs/user/advisor.md).
 
 ## Examples
 
-[docs/examples/README.md](docs/examples/README.md) has six runnable stories,
+[docs/examples/README.md](docs/examples/README.md) has eight runnable stories,
 each a psql script under `examples/` with structural checks
 (`examples/run_all.sh` runs them all; superuser and the core patch needed):
 
@@ -171,6 +171,8 @@ each a psql script under `examples/` with structural checks
 4  not_generated index paths
 5  hypothetical index lifecycle
 6  agent preflight evidence
+7  advisor candidate lifecycle
+8  advisor limitations
 ```
 
 ## Testing
@@ -221,11 +223,12 @@ docs/user/proposed-paths.md       candidate injection and fate
 docs/user/advisor.md              advisor and hypothetical indexes
 docs/user/agent-gate.md           evidence for preflight policies
 docs/user/comparison.md           EXPLAIN, HypoPG, pg_plan_advice and others
-docs/examples/                    the six runnable stories
+docs/examples/                    the eight runnable stories
 docs/technical/event-model.md     event kinds, fate alphabets, invariants
 docs/technical/json-format.md     machine-readable output, coverage
 docs/technical/architecture.md    layers
 docs/technical/implementation.md  code map
+docs/technical/output-format-audit.md  readability audit of the output
 docs/technical/safety-and-limits.md, overhead.md
 docs/testing/                     model-based tests, generator, test matrix
 ```
