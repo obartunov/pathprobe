@@ -35,7 +35,8 @@ our @SPEC_SHAPES = qw(
 our @PARALLELISM = qw(pinned_off default forced_on);
 our @POLICIES    = qw(winner_forbidden_true winner_forbidden_false);
 our %FATE_ALPHABET = map { $_ => 1 } qw(
-    not_injected survived survived_upper accepted_not_survived rejected unknown
+    target_not_found not_examined unknown rejected unknown_after_accept
+    survived_at_point survived displaced survived_upper
 );
 
 # role dimension -> concrete SQL role (undef => RESET ROLE / superuser)
@@ -256,18 +257,18 @@ sub mandatory_correctness_cases {
         _cc(cid=>'cor_target_missing',
             query=>'SELECT * FROM ppm.allowed WHERE v>5',
             spec=>_cand_spec(total_cost=>0.5, relname=>'nosuchtable'),
-            allowed_fates=>{not_injected=>1}, require=>['candidates','events'],
+            allowed_fates=>{target_not_found=>1}, require=>['candidates','events'],
             dims=>{target=>'target_missing',policy=>'winner_forbidden_false'}),
         _cc(cid=>'cor_cheap_injected',
             query=>'SELECT * FROM ppm.allowed WHERE id=42',
             spec=>_cand_spec(total_cost=>0.5, parallel_safe=>0),
-            allowed_fates=>{survived=>1,survived_upper=>1,accepted_not_survived=>1},
+            allowed_fates=>{survived=>1,survived_upper=>1,displaced=>1},
             require=>['candidates','events'],
             dims=>{target=>'target_exists',candidate_cost=>'cheap'}),
         _cc(cid=>'cor_expensive_candidate',
             query=>'SELECT * FROM ppm.allowed WHERE id=42',
             spec=>_cand_spec(total_cost=>1e9, parallel_safe=>0),
-            allowed_fates=>{rejected=>1,accepted_not_survived=>1},
+            allowed_fates=>{rejected=>1,displaced=>1},
             require=>['candidates','events'],
             dims=>{target=>'target_exists',candidate_cost=>'expensive'}),
         _cc(cid=>'cor_winner_forbidden_pinned',
@@ -632,9 +633,9 @@ sub generate_correctness {
                 my %fates;
                 if    ($wf && $par eq 'pinned_off') { %fates = (survived_upper=>1); }
                 elsif ($wf)                         { %fates = (survived_upper=>1,rejected=>1); }
-                elsif ($par eq 'pinned_off' && $comp eq 'cheap')     { %fates = (survived=>1,survived_upper=>1,accepted_not_survived=>1); }
-                elsif ($par eq 'pinned_off' && $comp eq 'expensive') { %fates = (rejected=>1,accepted_not_survived=>1); }
-                else { %fates = (survived=>1,survived_upper=>1,accepted_not_survived=>1,rejected=>1); }
+                elsif ($par eq 'pinned_off' && $comp eq 'cheap')     { %fates = (survived=>1,survived_upper=>1,displaced=>1); }
+                elsif ($par eq 'pinned_off' && $comp eq 'expensive') { %fates = (rejected=>1,displaced=>1); }
+                else { %fates = (survived=>1,survived_upper=>1,displaced=>1,rejected=>1); }
                 push @out, _cc(cid=>"gen_par_${par}__${pol}__${comp}",
                     query=>'SELECT * FROM ppm.allowed WHERE id=42', spec=>$spec,
                     parallelism=>$par, allowed_fates=>\%fates, require=>['candidates'],
@@ -806,14 +807,20 @@ sub check_correctness {
         my $cap = $lim->{max_events};
         push @fails, "emitted ".scalar(@ev)." events exceeds cap $cap" if defined $cap && @ev > $cap;
     }
+    push @fails, "missing coverage object" unless ref($j->{coverage}) eq 'HASH';
     for my $cand (@{ $j->{candidates} // [] }) {
         next unless ref $cand eq 'HASH';
         my $ec = $cand->{event_counts} // {};
-        my ($acc,$sur) = ($ec->{accepted}//0, $ec->{survived}//0);
-        push @fails, "candidate survived($sur) > accepted($acc)" if $sur > $acc;
-        if (($cand->{fate}//'') eq 'not_injected') {
-            push @fails, "not_injected but nonzero event_counts"
-                if ($ec->{accepted}//0)||($ec->{rejected}//0)||($ec->{survived}//0);
+        my ($acc,$sur,$dis) = ($ec->{accepted}//0, $ec->{survived}//0, $ec->{displaced}//0);
+        # counts only bound each other where acceptance is observed
+        if (($j->{coverage} // {})->{add_path_accepted}) {
+            push @fails, "candidate survived($sur) > accepted($acc)" if $sur > $acc;
+            push @fails, "candidate displaced($dis) > accepted($acc)" if $dis > $acc;
+        }
+        my $f = $cand->{fate} // '';
+        if ($f eq 'target_not_found' || $f eq 'not_examined') {
+            push @fails, "$f but nonzero event_counts"
+                if $acc || ($ec->{rejected}//0) || $sur || $dis;
         }
         push @fails, "fate '".($cand->{fate}//'')."' outside alphabet"
             unless $FATE_ALPHABET{$cand->{fate}//''};

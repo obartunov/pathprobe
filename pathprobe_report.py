@@ -526,7 +526,7 @@ def print_candidate_card(data):
     print(f"rows     : {cand.get('rows', 0):.0f}")
     print()
 
-    fate_str = fate.get("fate", "unknown").replace("_", " -> ").replace("not -> survived", "not survived")
+    fate_str = fate.get("fate", "unknown")
     print(f"fate     : {fate_str}")
 
     ws = fate.get("winner_strategy")
@@ -1096,8 +1096,8 @@ def print_gate_lines(data, rel_filter=None, pathname=None):
             fate_block = data.get("fate", {})
             fate_str   = fate_block.get("fate", "unknown")
             synth = {"excluded":0,"skipped":0,"rejected":0,"accepted":0,"survived":0}
-            if fate_str == "survived":                synth["survived"] = 1
-            elif fate_str == "accepted_not_survived": synth["accepted"] = 1
+            if fate_str in ("survived", "survived_at_point"):          synth["survived"] = 1
+            elif fate_str in ("displaced", "unknown_after_accept"):    synth["accepted"] = 1
             elif fate_str == "rejected":              synth["rejected"] = 1
             gate_syms, gs = derive_gate_state(synth, is_proposed=True, winner_forbidden=wf)
             rows.append((cand_name, gate_syms, gs))
@@ -1190,8 +1190,8 @@ def print_gate_diagram(data, rel_filter=None, pathname=None):
                 fate_str   = fate_block.get("fate", "unknown")
                 # Synthesize kinds from fate
                 synth = {"excluded":0,"skipped":0,"rejected":0,"accepted":0,"survived":0}
-                if fate_str == "survived":               synth["survived"] = 1
-                elif fate_str == "accepted_not_survived":synth["accepted"] = 1
+                if fate_str in ("survived", "survived_at_point"):       synth["survived"] = 1
+                elif fate_str in ("displaced", "unknown_after_accept"): synth["accepted"] = 1
                 elif fate_str == "rejected":             synth["rejected"] = 1
                 gate_syms, gs = derive_gate_state(synth, is_proposed=True, winner_forbidden=wf)
                 row = f"  {cand_name:<{name_w}}"

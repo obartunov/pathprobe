@@ -80,25 +80,39 @@ BEGIN
     fate := c->>'fate';
     -- I2: fate from the allowed alphabet
     IF msg IS NULL AND fate NOT IN
-       ('survived','survived_upper','accepted_not_survived',
-        'rejected','not_injected','unknown','inconsistent') THEN
+       ('target_not_found','not_examined','unknown','rejected',
+        'unknown_after_accept','survived_at_point','survived',
+        'displaced','survived_upper') THEN
       msg := 'fate alphabet: ' || fate;
     END IF;
     -- I3: injected iff target relation is in the query
     IF msg IS NULL AND (c->>'injected')::bool <> (rel = 'combo') THEN
       msg := 'injected vs target';
     END IF;
-    -- I4: not injected => fate not_injected and zero event counts
+    -- I4: not injected => target not in the query (I3), so target_not_found
     IF msg IS NULL AND NOT (c->>'injected')::bool AND
-       (fate <> 'not_injected'
-        OR (c->'event_counts'->>'accepted')::int <> 0) THEN
+       fate <> 'target_not_found' THEN
       msg := 'not-injected consistency';
     END IF;
-    -- I5: survived <= accepted (frontier needs acceptance first)
-    IF msg IS NULL AND
+    -- I4b: target_not_found / not_examined => no events of any kind
+    IF msg IS NULL AND fate IN ('target_not_found', 'not_examined') AND
+       ((c->'event_counts'->>'accepted')::int <> 0 OR
+        (c->'event_counts'->>'rejected')::int <> 0 OR
+        (c->'event_counts'->>'survived')::int <> 0 OR
+        (c->'event_counts'->>'displaced')::int <> 0) THEN
+      msg := 'not-examined consistency';
+    END IF;
+    -- I5: survived <= accepted, where acceptance is covered
+    IF msg IS NULL AND (j->'coverage'->>'add_path_accepted')::bool AND
        (c->'event_counts'->>'survived')::int >
        (c->'event_counts'->>'accepted')::int THEN
       msg := 'survived > accepted';
+    END IF;
+    -- I7: displaced <= accepted (only an accepted path can be displaced)
+    IF msg IS NULL AND (j->'coverage'->>'add_path_accepted')::bool AND
+       (c->'event_counts'->>'displaced')::int >
+       (c->'event_counts'->>'accepted')::int THEN
+      msg := 'displaced > accepted';
     END IF;
     -- I6: hypo entries: in_plan -> injected; survived <= accepted
     FOR h IN SELECT * FROM jsonb_array_elements(coalesce(j->'hypo_indexes','[]'::jsonb))

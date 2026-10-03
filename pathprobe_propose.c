@@ -1521,6 +1521,35 @@ retag_proposed_events(PathEventLog *log)
  * Activates propose_inject_hook alongside normal pathprobe hooks.
  * ----------
  */
+/*
+ * Does any range table, at any query level, hold a plain relation with this
+ * unqualified name?  Uses the same name test as propose_inject_hook.
+ * Inheritance and partition children are not in the parse tree, so a
+ * target named by a child relation is reported as not found.
+ */
+static bool
+relname_in_query_walker(Node *node, void *context)
+{
+	const char *relname = (const char *) context;
+
+	if (node == NULL)
+		return false;
+	if (IsA(node, RangeTblEntry))
+	{
+		RangeTblEntry *rte = (RangeTblEntry *) node;
+		char	   *name;
+
+		if (rte->rtekind != RTE_RELATION)
+			return false;
+		name = get_rel_name(rte->relid);
+		return name != NULL && strcmp(name, relname) == 0;
+	}
+	if (IsA(node, Query))
+		return query_tree_walker((Query *) node, relname_in_query_walker,
+								 context, QTW_EXAMINE_RTES_BEFORE);
+	return expression_tree_walker(node, relname_in_query_walker, context);
+}
+
 static PathProbeReport *
 pathprobe_propose_internal(const char *query_string,
 						   List *specs, List **hypo, bool advise,
@@ -1596,11 +1625,23 @@ pathprobe_propose_internal(const char *query_string,
 			RawStmt    *parsetree = lfirst_node(RawStmt, lc);
 			List	   *querytree_list;
 			PlannedStmt *ps;
+			ListCell   *sc;
 
 			querytree_list = pathprobe_analyze_one(parsetree, query_string);
 
 			/* ACL gate: authorize before any planning happens */
 			pathprobe_authorize_query(querytree_list, access);
+
+			/* target identity: tells not_examined from target_not_found */
+			foreach(sc, specs)
+			{
+				ProposedPathSpec *spec = (ProposedPathSpec *) lfirst(sc);
+
+				if (!spec->target_in_query)
+					spec->target_in_query =
+						relname_in_query_walker((Node *) querytree_list,
+												(void *) spec->relname);
+			}
 
 			/* structured hypo indexes must target vetted relations */
 			if (!access->is_superuser)
@@ -1901,100 +1942,148 @@ pathprobe_propose(PG_FUNCTION_ARGS)
 }
 
 /*
- * Candidate fate as a finite-state machine over the labeled event stream
- * (seq order).  This applies to CustomPath candidates only: one path per
+ * Candidate fate, derived from the labeled event stream (seq order) and the
+ * log's coverage.  This applies to CustomPath candidates only: one path per
  * identity.  Hypothetical indexes keep aggregate counters - many paths
- * share one hypo label, a per-identity FSM is the wrong model there.
+ * share one hypo label, a per-identity model is the wrong one there.
  *
- * States and legal transitions:
- *   INJECTED -accepted->            ACCEPTED
- *   INJECTED -rejected->            REJECTED     (terminal)
- *   ACCEPTED -survived->            SURVIVED     (frontier check)
- *   ACCEPTED/SURVIVED/UPPER -accepted @ upper rel-> UPPER
- * Anything else is an illegal transition: either the planner did something
- * we do not model, or our probes lie.  It is reported, not swallowed.
+ * Only observed events move the state.  When the decision point that would
+ * report an outcome is not covered in this run, the result is one of the
+ * unknown states instead of an outcome inferred from a missing event.
+ *
+ * At the target rel the candidate is rejected, or accepted; once accepted
+ * it is either seen in the pathlist right after its own add_path()
+ * (SURVIVED, which implies acceptance) and possibly displaced later.  An
+ * acceptance into an upper rel means the candidate path itself was carried
+ * up; rejection or displacement in an upper rel does not undo that.
+ * Sequences that contradict a covered decision point are reported as
+ * illegal: either the planner did something we do not model, or a probe
+ * is wrong.
  */
-typedef enum CandFateState
+typedef enum CandFate
 {
-	CAND_INJECTED,
-	CAND_ACCEPTED,
+	CAND_TARGET_NOT_FOUND,		/* no relation of that name in the query */
+	CAND_NOT_EXAMINED,			/* target in query, never reached injection */
+	CAND_UNKNOWN,				/* injected, no outcome observed */
 	CAND_REJECTED,
-	CAND_SURVIVED,
-	CAND_UPPER,
+	CAND_UNKNOWN_AFTER_ACCEPT,	/* accepted, later outcome not observed */
+	CAND_SURVIVED_AT_POINT,		/* survived, displacement not covered */
+	CAND_SURVIVED,				/* survived, no displacement observed */
+	CAND_DISPLACED,
+	CAND_UPPER,					/* accepted into an upper rel */
 	CAND_ILLEGAL
-}			CandFateState;
+}			CandFate;
 
-static CandFateState
-propose_candidate_fsm(PathEventLog *log, ProposedPathSpec * spec,
-					  int *illegal_seq)
+static CandFate
+propose_candidate_fate(PathEventLog *log, ProposedPathSpec * spec,
+					   int *illegal_seq)
 {
-	CandFateState st = CAND_INJECTED;
+	bool		acc_covered = (log->coverage & PP_COV_ACCEPTED) != 0;
+	bool		accepted = false,
+				rejected = false,
+				survived = false,
+				displaced = false,
+				upper = false;
 	int			i;
 
 	*illegal_seq = -1;
+	if (!spec->injected)
+		return spec->target_in_query ? CAND_NOT_EXAMINED :
+			CAND_TARGET_NOT_FOUND;
+
 	for (i = 0; i < log->nevents; i++)
 	{
 		PathEvent  *ev = &log->events[i];
-		bool		is_upper;
+		bool		ok = true;
 
 		if (ev->source != PATH_SOURCE_PROPOSED ||
 			!ev->label || strcmp(ev->label, spec->pathname) != 0)
 			continue;
-		if (ev->kind == PEK_DISPLACED)
-			continue;			/* not yet part of the fate model */
-		is_upper = (ev->relids == NULL || bms_is_empty(ev->relids));
 
-		switch (ev->kind)
+		if (ev->relids == NULL || bms_is_empty(ev->relids))
 		{
-			case PEK_ACCEPTED:
-				if (st == CAND_INJECTED && !is_upper)
-					st = CAND_ACCEPTED;
-				else if ((st == CAND_ACCEPTED || st == CAND_SURVIVED ||
-						  st == CAND_UPPER) && is_upper)
-					st = CAND_UPPER;
-				else
-					st = CAND_ILLEGAL;
-				break;
-			case PEK_REJECTED:
-				st = (st == CAND_INJECTED) ? CAND_REJECTED : CAND_ILLEGAL;
-				break;
-			case PEK_SURVIVED:
-				st = (st == CAND_ACCEPTED) ? CAND_SURVIVED : CAND_ILLEGAL;
-				break;
-			default:
-				st = CAND_ILLEGAL;
-				break;
+			if (ev->kind == PEK_ACCEPTED)
+			{
+				ok = (accepted || survived) && !displaced;
+				upper = true;
+			}
 		}
-		if (st == CAND_ILLEGAL)
+		else
+		{
+			switch (ev->kind)
+			{
+				case PEK_REJECTED:
+					ok = !(accepted || survived || displaced);
+					rejected = true;
+					break;
+				case PEK_ACCEPTED:
+					ok = !(rejected || displaced);
+					accepted = true;
+					break;
+				case PEK_SURVIVED:
+					ok = !(rejected || displaced) && (accepted || !acc_covered);
+					survived = true;
+					break;
+				case PEK_DISPLACED:
+					ok = !rejected && (accepted || !acc_covered);
+					displaced = true;
+					break;
+				default:
+					ok = false;
+					break;
+			}
+		}
+		if (!ok)
 		{
 			*illegal_seq = ev->seq;
-			return st;
+			return CAND_ILLEGAL;
 		}
 	}
-	return st;
+
+	if (upper)
+		return CAND_UPPER;
+	if (rejected)
+		return CAND_REJECTED;
+	if (displaced)
+		return CAND_DISPLACED;
+	if (survived)
+		return (log->coverage & PP_COV_DISPLACED) ? CAND_SURVIVED :
+			CAND_SURVIVED_AT_POINT;
+	if (accepted)
+		return CAND_UNKNOWN_AFTER_ACCEPT;
+	return CAND_UNKNOWN;
 }
 
 static const char *
-cand_fate_text(CandFateState st, bool injected, int illegal_seq,
-			   bool json_form)
+cand_fate_text(CandFate f, bool json_form)
 {
-	if (!injected)
-		return json_form ? "not_injected" : "not injected";
-	switch (st)
+	switch (f)
 	{
-		case CAND_SURVIVED:
-			return "survived";
-		case CAND_UPPER:
-			return json_form ? "survived_upper" : "survived (reached upper rel)";
-		case CAND_ACCEPTED:
-			return json_form ? "accepted_not_survived" : "accepted -> not survived";
+		case CAND_TARGET_NOT_FOUND:
+			return json_form ? "target_not_found" :
+				"target not found (no relation of that name in the query)";
+		case CAND_NOT_EXAMINED:
+			return json_form ? "not_examined" :
+				"not examined (target in query, injection point not reached)";
 		case CAND_REJECTED:
 			return "rejected";
+		case CAND_UNKNOWN_AFTER_ACCEPT:
+			return json_form ? "unknown_after_accept" :
+				"accepted -> later outcome not observed";
+		case CAND_SURVIVED_AT_POINT:
+			return json_form ? "survived_at_point" :
+				"survived its add_path (later displacement not observed)";
+		case CAND_SURVIVED:
+			return "survived";
+		case CAND_DISPLACED:
+			return json_form ? "displaced" : "accepted -> displaced";
+		case CAND_UPPER:
+			return json_form ? "survived_upper" : "survived (reached upper rel)";
 		case CAND_ILLEGAL:
 			return json_form ? "inconsistent" : "INCONSISTENT (illegal transition)";
-		case CAND_INJECTED:
+		case CAND_UNKNOWN:
 		default:
-			return "unknown";
+			return json_form ? "unknown" : "unknown (outcome not observed)";
 	}
 }
 
@@ -2017,7 +2106,6 @@ render_propose_card(PathProbeReport *report, StringInfo out,
 {
 	PathEventLog *log = report->log;
 	int			i;
-	bool		wp_accepted = false;
 	bool		wp_survived = false;
 	bool		wp_rejected = false;
 	Cost		wp_best_cost = 0.0;
@@ -2028,6 +2116,8 @@ render_propose_card(PathProbeReport *report, StringInfo out,
 	char		target_rel[32];
 	bool		target_found = false;
 	const char *fate;
+	CandFate	cf;
+	int			illegal_seq;
 	Cost		gap;
 	bool		gap_valid;
 	const char *note = NULL;
@@ -2062,8 +2152,6 @@ render_propose_card(PathProbeReport *report, StringInfo out,
 				wp_best_cost = ev->cost_total;
 				wp_cost_set = true;
 			}
-			if (ev->kind == PEK_ACCEPTED)
-				wp_accepted = true;
 			if (ev->kind == PEK_SURVIVED)
 				wp_survived = true;
 			if (ev->kind == PEK_REJECTED)
@@ -2083,16 +2171,12 @@ render_propose_card(PathProbeReport *report, StringInfo out,
 	}
 
 	/* Derive fate string */
-	{
-		int			illegal_seq;
-		CandFateState st = propose_candidate_fsm(log, spec, &illegal_seq);
-
-		fate = cand_fate_text(st, spec->injected, illegal_seq, false);
-		if (st == CAND_ILLEGAL)
-			note = psprintf("event #%d broke the fate machine: "
-							"either an unmodeled planner action or a probe bug",
-							illegal_seq);
-	}
+	cf = propose_candidate_fate(log, spec, &illegal_seq);
+	fate = cand_fate_text(cf, false);
+	if (cf == CAND_ILLEGAL)
+		note = psprintf("event #%d broke the fate machine: "
+						"either an unmodeled planner action or a probe bug",
+						illegal_seq);
 
 	/*
 	 * gap = candidate_best_cost - winner_cost < 0: candidate would win on raw
@@ -2102,7 +2186,8 @@ render_propose_card(PathProbeReport *report, StringInfo out,
 	gap = gap_valid ? (wp_best_cost - winner_cost) : 0.0;
 
 	/* Policy-aware note */
-	if (spec->winner_forbidden && wp_accepted && !wp_survived)
+	if (spec->winner_forbidden &&
+		(cf == CAND_DISPLACED || cf == CAND_UNKNOWN_AFTER_ACCEPT))
 	{
 		if (gap_valid && gap < 0.0)
 			note = "candidate would win on raw cost, "
@@ -2131,10 +2216,7 @@ render_propose_card(PathProbeReport *report, StringInfo out,
 
 	if (!injected)
 	{
-		/* keep text output consistent with JSON fate "not_injected" */
-		appendStringInfoString(out,
-							   "fate   : not injected "
-							   "(target relation not found in query)\n");
+		appendStringInfo(out, "fate   : %s\n", fate);
 		return;
 	}
 	appendStringInfoChar(out, '\n');
@@ -2223,7 +2305,8 @@ propose_candidate_json(StringInfo out, PathEventLog *log,
 	NodeTag		winner_type = T_Invalid;
 	int			n_acc = 0,
 				n_rej = 0,
-				n_surv = 0;
+				n_surv = 0,
+				n_disp = 0;
 	const char *fate;
 
 	for (i = 0; i < log->nevents; i++)
@@ -2244,6 +2327,8 @@ propose_candidate_json(StringInfo out, PathEventLog *log,
 				n_rej++;
 			else if (ev->kind == PEK_SURVIVED)
 				n_surv++;
+			else if (ev->kind == PEK_DISPLACED)
+				n_disp++;
 		}
 		else if (ev->kind == PEK_SURVIVED &&
 				 ev->source == PATH_SOURCE_REL_HOOK &&
@@ -2260,9 +2345,9 @@ propose_candidate_json(StringInfo out, PathEventLog *log,
 
 	{
 		int			illegal_seq;
-		CandFateState st = propose_candidate_fsm(log, spec, &illegal_seq);
 
-		fate = cand_fate_text(st, spec->injected, illegal_seq, true);
+		fate = cand_fate_text(propose_candidate_fate(log, spec, &illegal_seq),
+							  true);
 	}
 
 	appendStringInfoString(out, "{\"pathname\":");
@@ -2288,8 +2373,9 @@ propose_candidate_json(StringInfo out, PathEventLog *log,
 	if (wp_cost_set && winner_set)
 		appendStringInfo(out, ",\"gap\":%.2f", wp_best_cost - winner_cost);
 	appendStringInfo(out,
-					 ",\"event_counts\":{\"accepted\":%d,\"rejected\":%d,\"survived\":%d}",
-					 n_acc, n_rej, n_surv);
+					 ",\"event_counts\":{\"accepted\":%d,\"rejected\":%d,"
+					 "\"survived\":%d,\"displaced\":%d}",
+					 n_acc, n_rej, n_surv, n_disp);
 	appendStringInfoChar(out, '}');
 }
 
@@ -2309,6 +2395,7 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 	List	   *hypo;
 	bool		advise;
 	ProposedPathSpec *spec;
+	bool		explicit_candidate = true;
 	PathProbeOpts opts = {false, true};
 	PathProbeAccess access;
 	PathProbeReport *report;
@@ -2348,7 +2435,8 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 
 	if (spec == NULL && specs == NIL)
 	{
-		/* hypo-only call: no legacy candidate block; emit events+candidates */
+		/* hypo-only or advise-only call: there is no candidate to report on */
+		explicit_candidate = false;
 		spec = (ProposedPathSpec *) palloc0(sizeof(ProposedPathSpec));
 		spec->pathname = "";
 		spec->relname = "";
@@ -2359,8 +2447,6 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 	{
 		PathEventLog *log = report->log;
 		int			i;
-		bool		wp_accepted = false;
-		bool		wp_survived = false;
 		bool		wp_rejected = false;
 		Cost		wp_best_cost = 0.0;
 		bool		wp_cost_set = false;
@@ -2368,6 +2454,8 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 		Cost		winner_cost = 0.0;
 		bool		winner_set = false;
 		const char *fate;
+		CandFate	cf;
+		int			illegal_seq;
 		Cost		gap;
 		bool		gap_valid;
 		const char *note = NULL;
@@ -2384,10 +2472,6 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 					wp_best_cost = ev->cost_total;
 					wp_cost_set = true;
 				}
-				if (ev->kind == PEK_ACCEPTED)
-					wp_accepted = true;
-				if (ev->kind == PEK_SURVIVED)
-					wp_survived = true;
 				if (ev->kind == PEK_REJECTED)
 					wp_rejected = true;
 			}
@@ -2404,21 +2488,15 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 			}
 		}
 
-		if (!spec->injected)
-			fate = "not_injected";
-		else if (wp_survived)
-			fate = "survived";
-		else if (wp_accepted)
-			fate = "accepted_not_survived";
-		else if (wp_rejected)
-			fate = "rejected";
-		else
-			fate = "unknown";
+		/* the same derivation as candidates[] and the text card */
+		cf = propose_candidate_fate(log, spec, &illegal_seq);
+		fate = cand_fate_text(cf, true);
 
 		gap_valid = (wp_cost_set && winner_set);
 		gap = gap_valid ? (wp_best_cost - winner_cost) : 0.0;
 
-		if (spec->winner_forbidden && wp_accepted && !wp_survived)
+		if (spec->winner_forbidden &&
+			(cf == CAND_DISPLACED || cf == CAND_UNKNOWN_AFTER_ACCEPT))
 			note = gap_valid && gap < 0.0
 				? "candidate_would_win_policy_prevented"
 				: "winner_forbidden_active";
@@ -2454,21 +2532,28 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 						 "  \"target\": {\"relname\":\"%s\"},\n",
 						 spec->relname);
 
-		/* fate block */
-		appendStringInfo(&out,
-						 "  \"fate\": {\"fate\":\"%s\"", fate);
-		if (winner_set)
+		/*
+		 * Legacy single-candidate fate.  Without an explicit candidate there
+		 * is nothing to report, so the block is omitted rather than claiming
+		 * a fate for the placeholder spec.
+		 */
+		if (explicit_candidate)
+		{
 			appendStringInfo(&out,
-							 ",\"winner_strategy\":\"%s\",\"winner_cost\":%.2f",
-							 pathtype_name(winner_type), winner_cost);
-		if (gap_valid)
-			appendStringInfo(&out, ",\"gap\":%.2f", gap);
-		if (note)
+							 "  \"fate\": {\"fate\":\"%s\"", fate);
+			if (winner_set)
+				appendStringInfo(&out,
+								 ",\"winner_strategy\":\"%s\",\"winner_cost\":%.2f",
+								 pathtype_name(winner_type), winner_cost);
+			if (gap_valid)
+				appendStringInfo(&out, ",\"gap\":%.2f", gap);
+			if (note)
 			{
 				appendStringInfoString(&out, ",\"note\":");
 				pathprobe_json_str(&out, note);
 			}
-		appendStringInfoString(&out, "},\n");
+			appendStringInfoString(&out, "},\n");
+		}
 
 		/* advisor summary block (machine model, no text parsing needed) */
 		appendStringInfoString(&out, "  \"advisor\": {");

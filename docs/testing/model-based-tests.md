@@ -93,9 +93,11 @@ Each security case declares one or more expectations:
 ## Correctness checks
 
 Structural invariants on the returned JSON: `events[].seq` strictly increasing;
-per-candidate `survived <= accepted`; `not_injected` implies zero event counts;
-`fate` within `{not_injected, survived, survived_upper, accepted_not_survived,
-rejected, unknown}`; hypo `in_plan` implies `injected` and `survived <=
+a `coverage` object is present; per-candidate `survived <= accepted` and
+`displaced <= accepted` where acceptance is covered; `target_not_found` and
+`not_examined` imply zero event counts; `fate` within `{target_not_found,
+not_examined, unknown, rejected, unknown_after_accept, survived_at_point,
+survived, displaced, survived_upper}`; hypo `in_plan` implies `injected` and `survived <=
 accepted`; `advisor.enabled` implies `baseline_cost` and `plan_cost` with
 `query_level_benefit == baseline_cost - plan_cost`; and, when `max_events` is
 set, `events_truncated` reflects the cap and the emitted event count does not

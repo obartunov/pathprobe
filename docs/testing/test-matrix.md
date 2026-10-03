@@ -17,7 +17,7 @@ full       exhaustive product for manual/nightly runs
 json escaping
 candidate fate alphabet
 injected vs target relation
-not_injected consistency
+not-injected consistency (target_not_found)
 survived <= accepted
 hypo in_plan -> injected
 advisor block completeness

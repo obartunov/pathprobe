@@ -48,6 +48,7 @@ typedef struct ProposedPathSpec
 
 	/* runtime */
 	bool		injected;
+	bool		target_in_query;	/* relname appears in some range table */
 }			ProposedPathSpec;
 
 /* ----------

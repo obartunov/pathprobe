@@ -37,6 +37,7 @@ DECLARE
   naccepted  int;
   nrejected  int;
   nsurvived  int;
+  ndisplaced int;
 BEGIN
   FOR r IN SELECT * FROM pp_combo_cases ORDER BY name
   LOOP
@@ -67,12 +68,14 @@ BEGIN
       naccepted := coalesce((c->'event_counts'->>'accepted')::int, 0);
       nrejected := coalesce((c->'event_counts'->>'rejected')::int, 0);
       nsurvived := coalesce((c->'event_counts'->>'survived')::int, 0);
+      ndisplaced := coalesce((c->'event_counts'->>'displaced')::int, 0);
     END IF;
 
     -- I2: fate from the allowed alphabet.
     IF msg IS NULL AND fate NOT IN
-       ('survived','survived_upper','accepted_not_survived',
-        'rejected','not_injected','unknown','inconsistent') THEN
+       ('target_not_found','not_examined','unknown','rejected',
+        'unknown_after_accept','survived_at_point','survived',
+        'displaced','survived_upper') THEN
       msg := 'fate alphabet: ' || coalesce(fate, '<null>');
     END IF;
 
@@ -81,15 +84,28 @@ BEGIN
       msg := 'injected vs target';
     END IF;
 
-    -- I4: not injected => fate not_injected and zero event counts.
+    -- I4: not injected => target not in the query (I3), so target_not_found.
     IF msg IS NULL AND NOT coalesce((c->>'injected')::bool, false) AND
-       (fate <> 'not_injected' OR naccepted <> 0 OR nrejected <> 0 OR nsurvived <> 0) THEN
+       fate <> 'target_not_found' THEN
       msg := 'not-injected consistency';
     END IF;
 
-    -- I5: survived <= accepted.  Frontier survival needs prior acceptance.
-    IF msg IS NULL AND nsurvived > naccepted THEN
+    -- I4b: target_not_found / not_examined => no events of any kind.
+    IF msg IS NULL AND fate IN ('target_not_found', 'not_examined') AND
+       (naccepted <> 0 OR nrejected <> 0 OR nsurvived <> 0 OR ndisplaced <> 0) THEN
+      msg := 'not-examined consistency';
+    END IF;
+
+    -- I5: survived <= accepted, where acceptance is covered.
+    IF msg IS NULL AND coalesce((j->'coverage'->>'add_path_accepted')::bool, false)
+       AND nsurvived > naccepted THEN
       msg := 'survived > accepted';
+    END IF;
+
+    -- I5b: displaced <= accepted, where acceptance is covered.
+    IF msg IS NULL AND coalesce((j->'coverage'->>'add_path_accepted')::bool, false)
+       AND ndisplaced > naccepted THEN
+      msg := 'displaced > accepted';
     END IF;
 
     -- I6: hypo entries: in_plan -> injected; survived <= accepted.
