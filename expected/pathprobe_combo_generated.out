@@ -124,6 +124,31 @@ BEGIN
           msg := 'hypo survived > accepted';
           EXIT;
         END IF;
+        -- I6b: hypo fate alphabet; inconsistent is public but never expected;
+        -- never examined or generated => no events; not injected =>
+        -- target_not_found / not_examined.
+        IF coalesce(h->>'fate', '') NOT IN
+           ('target_not_found','not_examined','not_generated','rejected',
+            'displaced','survived_at_point','survived','unknown',
+            'inconsistent') THEN
+          msg := 'hypo fate alphabet: ' || coalesce(h->>'fate', '<null>');
+          EXIT;
+        END IF;
+        IF h->>'fate' = 'inconsistent' THEN
+          msg := 'hypo fate inconsistent';
+          EXIT;
+        END IF;
+        IF h->>'fate' IN ('target_not_found','not_examined','not_generated') AND
+           (coalesce((h->>'accepted')::int, 0) <> 0 OR coalesce((h->>'rejected')::int, 0) <> 0 OR
+            coalesce((h->>'survived')::int, 0) <> 0 OR coalesce((h->>'displaced')::int, 0) <> 0) THEN
+          msg := 'hypo not generated but has events';
+          EXIT;
+        END IF;
+        IF NOT coalesce((h->>'injected')::bool, false) AND
+           h->>'fate' NOT IN ('target_not_found','not_examined') THEN
+          msg := 'hypo not injected consistency';
+          EXIT;
+        END IF;
       END LOOP;
     END IF;
 

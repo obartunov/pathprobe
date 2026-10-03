@@ -34,6 +34,10 @@ our @SPEC_SHAPES = qw(
 );
 our @PARALLELISM = qw(pinned_off default forced_on);
 our @POLICIES    = qw(winner_forbidden_true winner_forbidden_false);
+our %HYPO_FATE_ALPHABET = map { $_ => 1 } qw(
+    target_not_found not_examined not_generated rejected displaced
+    survived_at_point survived unknown inconsistent
+);
 our %FATE_ALPHABET = map { $_ => 1 } qw(
     target_not_found not_examined unknown rejected unknown_after_accept
     survived_at_point survived displaced survived_upper
@@ -838,6 +842,22 @@ sub check_correctness {
         next unless ref $h eq 'HASH';
         push @fails, "hypo in_plan but not injected" if $h->{in_plan} && !$h->{injected};
         push @fails, "hypo survived > accepted" if ($h->{survived}//0) > ($h->{accepted}//0);
+        my $hf = $h->{fate} // '';
+        push @fails, "hypo fate '$hf' outside alphabet" unless $HYPO_FATE_ALPHABET{$hf};
+        # public, but a contradiction against a covered point: never green
+        push @fails, "hypo fate inconsistent" if $hf eq 'inconsistent';
+        push @fails, "hypo $hf but nonzero counts"
+            if ($hf eq 'target_not_found' || $hf eq 'not_examined' || $hf eq 'not_generated')
+               && (($h->{accepted}//0) || ($h->{rejected}//0) || ($h->{survived}//0) || ($h->{displaced}//0));
+        push @fails, "hypo not injected but fate '$hf'"
+            if !$h->{injected} && $hf ne 'target_not_found' && $hf ne 'not_examined';
+        my $ib = $h->{index_build};
+        my $ibcov = ($j->{coverage} // {})->{index_build} ? 1 : 0;
+        push @fails, "hypo index_build presence does not match coverage"
+            if (ref($ib) eq 'HASH' ? 1 : 0) != $ibcov;
+        push @fails, "hypo $hf but index_build.generated > 0"
+            if ref($ib) eq 'HASH' && ($ib->{generated}//0) > 0
+               && ($hf eq 'not_examined' || $hf eq 'not_generated');
     }
     if ($c->{advisor_expected}) {
         my $adv = $j->{advisor} // {};

@@ -49,4 +49,60 @@ FROM (VALUES (1, 'hypo', '{"hypo_indexes":[{"relname":"lc_a","columns":["v"]}]}'
 LATERAL (SELECT pathprobe_propose_json('SELECT * FROM lc_a WHERE v = 3', spec)::jsonb j) s
 ORDER BY n;
 
-DROP TABLE lc_a, lc_b;
+-- 5. hypothetical index fate.  One row per hypo: fate, reason, and the
+-- build_index_paths() decisions seen for it
+CREATE TABLE lc_h (id int PRIMARY KEY, a int, b int, pad text);
+INSERT INTO lc_h SELECT g, g % 1000, g % 50, repeat('x', 40)
+FROM generate_series(1, 20000) g;
+ALTER TABLE lc_h SET (autovacuum_enabled = off);
+VACUUM (ANALYZE) lc_h;
+CREATE FUNCTION lc_hypo(q text, spec text)
+RETURNS TABLE (name text, fate text, reason text, calls jsonb, generated int,
+               not_generated jsonb, accepted int, survived int, displaced int)
+LANGUAGE sql AS $$
+  SELECT h->>'name', h->>'fate', h->>'fate_reason', h->'index_build'->'calls',
+         (h->'index_build'->>'generated')::int, h->'index_build'->'not_generated',
+         (h->>'accepted')::int, (h->>'survived')::int, (h->>'displaced')::int
+  FROM jsonb_array_elements(pathprobe_propose_json(q, spec)::jsonb->'hypo_indexes') h
+$$;
+
+-- 5a. survived; not generated (no clause, ordering or index-only scan for
+-- it); relation not in the query; relation in the query but removed
+-- before planning
+SELECT * FROM lc_hypo('SELECT * FROM lc_h WHERE a = 7',
+  '{"hypo_indexes":[{"name":"on_a","relname":"lc_h","columns":["a"]},
+                    {"name":"on_b","relname":"lc_h","columns":["b"]},
+                    {"name":"other_rel","relname":"lc_b","columns":["w"]}]}');
+SELECT * FROM lc_hypo('SELECT lc_h.* FROM lc_h LEFT JOIN lc_b ON lc_b.id = lc_h.id WHERE lc_h.a = 7',
+  '{"hypo_indexes":[{"name":"removed","relname":"lc_b","columns":["w"]}]}');
+
+-- 5b. partial index whose predicate is not implied: never reaches
+-- build_index_paths(), so not examined rather than not generated
+SELECT * FROM lc_hypo('SELECT * FROM lc_h WHERE a = 7',
+  '{"hypo_sql":["CREATE INDEX partial_a ON lc_h (a) WHERE b = 5"]}');
+
+-- 5c. call sites.  The OR arms build paths the plain call does not; they
+-- end up only inside a BitmapOr, which carries no label, so the outcome is
+-- unknown.  A hash index has no clause for the plain call (no native SAOP)
+-- and builds a bitmap path in the non-native SAOP call.
+SELECT * FROM lc_hypo('SELECT * FROM lc_h WHERE a = 7 OR b = 9',
+  '{"hypo_indexes":[{"name":"or_a_b","relname":"lc_h","columns":["a","b"]}]}');
+SELECT * FROM lc_hypo('SELECT * FROM lc_h WHERE a IN (1, 2, 3)',
+  '{"hypo_sql":["CREATE INDEX hash_a ON lc_h USING hash (a)"]}');
+
+-- 5d. a later hypo displaces every accepted path of an earlier one, although
+-- the earlier one was in the pathlist right after its own injection (the
+-- covering one wins by an index-only scan, hence the VACUUM above)
+SELECT * FROM lc_hypo('SELECT a, b FROM lc_h WHERE a = 7',
+  '{"hypo_indexes":[{"name":"narrow","relname":"lc_h","columns":["a"]},
+                    {"name":"covering","relname":"lc_h","columns":["a","b"]}]}');
+
+-- 5e. the text form carries the same fate
+SELECT substring(line from 'fate=.*') AS fate
+FROM regexp_split_to_table(pathprobe_propose('SELECT * FROM lc_h WHERE a = 7',
+  '{"hypo_indexes":[{"name":"t_on_b","relname":"lc_h","columns":["b"]},
+                    {"name":"t_other","relname":"lc_b","columns":["w"]}]}'), E'\n') line
+WHERE line LIKE 'hypo:%';
+
+DROP FUNCTION lc_hypo(text, text);
+DROP TABLE lc_a, lc_b, lc_h;

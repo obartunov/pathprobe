@@ -121,6 +121,27 @@ BEGIN
       IF msg IS NULL AND (h->>'survived')::int > (h->>'accepted')::int THEN
         msg := 'hypo survived > accepted';
       END IF;
+      -- I6b: hypo fate: alphabet; inconsistent is public but never expected;
+      -- never examined or generated => no events; not injected =>
+      -- target_not_found / not_examined
+      IF msg IS NULL AND coalesce(h->>'fate', '') NOT IN
+         ('target_not_found','not_examined','not_generated','rejected',
+          'displaced','survived_at_point','survived','unknown',
+          'inconsistent') THEN
+        msg := 'hypo fate alphabet: ' || coalesce(h->>'fate', '<null>');
+      END IF;
+      IF msg IS NULL AND h->>'fate' = 'inconsistent' THEN
+        msg := 'hypo fate inconsistent';
+      END IF;
+      IF msg IS NULL AND h->>'fate' IN ('target_not_found','not_examined','not_generated') AND
+         ((h->>'accepted')::int <> 0 OR (h->>'rejected')::int <> 0 OR
+          (h->>'survived')::int <> 0 OR (h->>'displaced')::int <> 0) THEN
+        msg := 'hypo not generated but has events';
+      END IF;
+      IF msg IS NULL AND NOT (h->>'injected')::bool AND
+         h->>'fate' NOT IN ('target_not_found','not_examined') THEN
+        msg := 'hypo not injected consistency';
+      END IF;
     END LOOP;
     -- I7: advise => advisor block enabled with baseline/plan costs
     IF msg IS NULL AND hypoform = 3 AND
