@@ -1,0 +1,76 @@
+# 9. Advisor audit
+
+## Question
+
+For common query patterns, what does the advisor generate, and what does
+pathprobe measure for each candidate?
+
+The current advisor is a local candidate generator.  PathProbe measures what
+happened to the generated candidates.  It does not claim that a candidate is
+globally good for the workload.
+
+## Setup
+
+`examples/09_advisor_audit.sql`: `ex9_t` (30000 rows, primary key, an index
+on `(b, a)` and one on `(lower(d))`) and `ex9_u` (3000 rows).  Nineteen
+queries, each probed with `{"advise": true}`.  For each candidate: the atoms
+the advisor extracted, the candidate's keys, whether index paths were built,
+its fate and `in_plan`.
+
+## What EXPLAIN shows
+
+The plan with the indexes that exist.  It cannot say which index the advisor
+would propose, or what happened to it.
+
+## What pathprobe shows
+
+A selection of rows, cells abbreviated:
+
+```text
+ n | pattern                  | atoms                         | candidate              | built | fate      | in_plan
+---+--------------------------+-------------------------------+------------------------+-------+-----------+--------
+ 3 | equality + range         | ex9_t: c=, ts~                | ex9_t (c, ts)          |     1 | survived  | t
+ 3 | equality + range         | ex9_t: c=, ts~                | ex9_t (c)              |     1 | displaced | f
+ 4 | ORDER BY ... LIMIT       | ex9_t:                        | ex9_t (ts)             |     1 | survived  | t
+ 5 | ORDER BY ... DESC LIMIT  | ex9_t:                        |                        |       |           |
+ 7 | join, no constant on t   | ex9_u: id= | ex9_t:           | ex9_u (id) INCLUDE ... |     1 | survived  | t
+19 | join, constant via EC    | ex9_u: w= | ex9_t: c=         | ex9_t (c)              |     1 | survived  | t
+ 9 | OR, one column           | ex9_t: (((ts = ...) OR ...))= | ex9_t ((((ts = ...)))) |     1 | rejected  | f
+13 | expression, index exists | ex9_t: (lower(d))=            | ex9_t ((lower(d)))     |     1 | survived  | t
+15 | keys of (b, a) reversed  | ex9_t: a=, b=                 | ex9_t (a, b)           |     1 | survived  | t
+17 | LIKE prefix              | ex9_t:                        |                        |       |           |
+18 | eight restrictions       | ex9_t: a=, b=, c=, d=, ts=, id= | ex9_t (a, b, c, d, ts, id) | 1 | survived | t
+```
+
+## Explanation
+
+- Simple equality, range, equality + range, `IS NULL`, expressions,
+  boolean columns, `ORDER BY ... LIMIT` and `GROUP BY` produce the expected
+  candidates, and each traces through `index_build`, the `add_path()`
+  counts and `in_plan`.
+- `ORDER BY ... DESC`, `IS NOT NULL`, `LIKE 'prefix%'` and a bare join
+  clause produce nothing.  A constant that reaches a join column through an
+  equivalence class does (19).
+- An `OR` becomes one boolean expression candidate; for `ts = x OR ts = y`
+  no `(ts)` candidate is generated (9).
+- An expression index that already exists is proposed again (13), and
+  `(a, b)` is proposed next to an existing `(b, a)` (15).  Both "win" in
+  `in_plan`: a hypothetical btree index is costed without the descent cost
+  of a real one, so it beats an identical real index by that amount (0.25
+  here).  The same happens to the six-column composite next to the primary
+  key (18).
+- Of eight restrictions only six become atoms (18); nothing reports the two
+  that were dropped.
+
+[The audit](../technical/advisor-audit.md) has the full pattern table, the
+classification of each behavior, and the bugs found.
+
+## Caveat
+
+- `built` is always 1 here: the advisor only proposes keys taken from
+  indexable clauses or pathkeys, so its candidates are not `not_generated`.
+- A small positive `query_level_benefit` together with `in_plan = true` is
+  not evidence of a useful index while the descent-cost difference above
+  is not fixed.
+- The checks in the script assert what the advisor generates, not which
+  candidate wins.

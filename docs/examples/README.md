@@ -17,8 +17,9 @@ pathprobe  what the planner considered on the way: excluded, skipped,
 | 6 | [Agent preflight](06-agent-preflight.md) | `examples/06_agent_preflight.sql` |
 | 7 | [Advisor candidate lifecycle](07-advisor-candidate-lifecycle.md) | `examples/07_advisor_candidate_lifecycle.sql` |
 | 8 | [Advisor limitations](08-advisor-limitations.md) | `examples/08_advisor_limitations.sql` |
+| 9 | [Advisor audit](09-advisor-audit.md) | `examples/09_advisor_audit.sql` |
 
-All eight scripts are runnable.  The part of story 3 about builds without the
+All nine scripts are runnable.  The part of story 3 about builds without the
 core hooks patch is description only.
 
 ## Running
@@ -31,7 +32,7 @@ with `patches/pathprobe-core-hooks.patch`, including the index path hook.
 PGDATABASE=scratch examples/run_all.sh
 ```
 
-Each script creates its own small tables (`ex1_*` ... `ex8_*`, at most 30000
+Each script creates its own small tables (`ex1_*` ... `ex9_*`, at most 30000
 rows so that `ANALYZE` reads every row), runs
 `ANALYZE`, prints what EXPLAIN and pathprobe show, and ends with structural
 checks that raise an error when an expectation does not hold.  The checks
