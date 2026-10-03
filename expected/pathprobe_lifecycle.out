@@ -1,0 +1,76 @@
+-- candidate lifecycle: displacement, target identity, coverage
+SET client_min_messages = warning;
+CREATE EXTENSION IF NOT EXISTS pathprobe;
+RESET client_min_messages;
+SET max_parallel_workers_per_gather = 0;
+CREATE TABLE lc_a (id int PRIMARY KEY, v int);
+CREATE TABLE lc_b (id int PRIMARY KEY, w text);
+INSERT INTO lc_a SELECT g, g % 100 FROM generate_series(1, 2000) g;
+INSERT INTO lc_b SELECT g, 'x' FROM generate_series(1, 2000) g;
+ANALYZE lc_a, lc_b;
+-- 1. a later, cheaper candidate displaces an earlier one; the earlier one
+-- was in the pathlist right after its own add_path, but is displaced
+SELECT c->>'pathname' AS pathname, c->>'fate' AS fate,
+       (c->'event_counts'->>'displaced')::int AS displaced
+FROM jsonb_array_elements(pathprobe_propose_json('SELECT * FROM lc_a WHERE id = 7',
+  '{"candidates":[
+    {"target":{"relname":"lc_a"},"candidate":{"pathname":"early","provider":"t"},"cost":{"total_cost":5.0,"rows":1},"planner":{"parallel_safe":false}},
+    {"target":{"relname":"lc_a"},"candidate":{"pathname":"late","provider":"t"},"cost":{"total_cost":1.0,"rows":1},"planner":{"parallel_safe":false}}]}'
+  )::jsonb->'candidates') c
+ORDER BY 1;
+ pathname |      fate      | displaced 
+----------+----------------+-----------
+ early    | displaced      |         1
+ late     | survived_upper |         0
+(2 rows)
+
+-- 2. target identity: no such relation in the query, versus a relation in
+-- the query that join removal drops before the injection point
+SELECT tgt, j->'candidates'->0->>'fate' AS fate,
+       j->'fate'->>'fate' = j->'candidates'->0->>'fate' AS same_as_toplevel
+FROM (VALUES (1, 'no_such_rel', 'SELECT * FROM lc_a WHERE id = 7'),
+             (2, 'lc_b', 'SELECT lc_a.* FROM lc_a LEFT JOIN lc_b ON lc_b.id = lc_a.id WHERE lc_a.id = 7'))
+     q(n, tgt, sql),
+LATERAL (SELECT pathprobe_propose_json(sql,
+           format('{"target":{"relname":"%s"},"candidate":{"pathname":"c","provider":"t"},"cost":{"total_cost":0.5,"rows":1}}', tgt))::jsonb j) s
+ORDER BY n;
+     tgt     |       fate       | same_as_toplevel 
+-------------+------------------+------------------
+ no_such_rel | target_not_found | t
+ lc_b        | not_examined     | t
+(2 rows)
+
+-- 3. coverage: propose observes acceptance and displacement; with min_gap
+-- set, rejections are not covered
+SELECT pathprobe_propose_json('SELECT * FROM lc_a WHERE id = 7', '{"advise":true}')::jsonb->'coverage' AS coverage;
+                                                                                       coverage                                                                                        
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"index_build": false, "join_excluded": true, "add_path_accepted": true, "add_path_precheck": true, "add_path_rejected": true, "survived_snapshot": true, "add_path_displaced": true}
+(1 row)
+
+SET pathprobe.min_gap = 1;
+SELECT pathprobe_json('SELECT * FROM lc_a WHERE id = 7')::jsonb->'coverage'->>'add_path_rejected' AS rejected_covered;
+ rejected_covered 
+------------------
+ false
+(1 row)
+
+RESET pathprobe.min_gap;
+-- 4. without an explicit candidate (hypo-only, advise-only) there is no
+-- legacy top-level fate; with one, it is present
+SELECT mode, j ? 'fate' AS has_toplevel_fate,
+       jsonb_array_length(j->'candidates') AS ncandidates
+FROM (VALUES (1, 'hypo', '{"hypo_indexes":[{"relname":"lc_a","columns":["v"]}]}'),
+             (2, 'advise', '{"advise":true}'),
+             (3, 'candidate', '{"target":{"relname":"lc_a"},"candidate":{"pathname":"c","provider":"t"},"cost":{"total_cost":0.5,"rows":1}}'))
+     q(n, mode, spec),
+LATERAL (SELECT pathprobe_propose_json('SELECT * FROM lc_a WHERE v = 3', spec)::jsonb j) s
+ORDER BY n;
+   mode    | has_toplevel_fate | ncandidates 
+-----------+-------------------+-------------
+ hypo      | f                 |           0
+ advise    | f                 |           0
+ candidate | t                 |           1
+(3 rows)
+
+DROP TABLE lc_a, lc_b;
