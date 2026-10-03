@@ -102,14 +102,25 @@ simple expression arguments
 Current v1 skips:
 
 ```text
-OR branches
-join quals
+join quals (a constant reaching a join column through an equivalence class
+  still produces an atom)
 IS NOT NULL
 unsupported BooleanTest forms
+LIKE / pattern operators (no strategy in the default btree opfamily)
+ORDER BY ... DESC or NULLS FIRST (no ordered candidate)
+atoms beyond the sixth per relation (dropped without a flag)
+partial indexes (never proposed)
 ```
 
-Skipped does not mean impossible.  It means this advisor pass intentionally did
-not model that shape.
+Skipped does not mean impossible.  It means this advisor pass does not model
+that shape.  An `OR` restriction is not split into branches: the whole clause
+currently becomes one boolean expression candidate, which is a known defect.
+
+Two more known defects: an existing expression index is proposed again, and a
+hypothetical btree index is costed without the descent cost of a real one, so
+a functional duplicate of an existing index can show `in_plan = true` with a
+small `query_level_benefit`.  See `docs/technical/advisor-audit.md` and
+[example 9](../examples/09-advisor-audit.md).
 
 ## Existing index skip
 

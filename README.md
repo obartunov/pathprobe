@@ -160,7 +160,7 @@ indexes are not.  See [advisor and hypothetical indexes](docs/user/advisor.md).
 
 ## Examples
 
-[docs/examples/README.md](docs/examples/README.md) has eight runnable stories,
+[docs/examples/README.md](docs/examples/README.md) has nine runnable stories,
 each a psql script under `examples/` with structural checks
 (`examples/run_all.sh` runs them all; superuser and the core patch needed):
 
@@ -173,6 +173,7 @@ each a psql script under `examples/` with structural checks
 6  agent preflight evidence
 7  advisor candidate lifecycle
 8  advisor limitations
+9  advisor audit over common query patterns
 ```
 
 ## Testing
@@ -223,12 +224,13 @@ docs/user/proposed-paths.md       candidate injection and fate
 docs/user/advisor.md              advisor and hypothetical indexes
 docs/user/agent-gate.md           evidence for preflight policies
 docs/user/comparison.md           EXPLAIN, HypoPG, pg_plan_advice and others
-docs/examples/                    the eight runnable stories
+docs/examples/                    the nine runnable stories
 docs/technical/event-model.md     event kinds, fate alphabets, invariants
 docs/technical/json-format.md     machine-readable output, coverage
 docs/technical/architecture.md    layers
 docs/technical/implementation.md  code map
 docs/technical/output-format-audit.md  readability audit of the output
+docs/technical/advisor-audit.md   what the advisor generates, skips and gets wrong
 docs/technical/safety-and-limits.md, overhead.md
 docs/testing/                     model-based tests, generator, test matrix
 ```
@@ -244,6 +246,9 @@ docs/testing/                     model-based tests, generator, test matrix
   drops produce no DISPLACED event.
 - The JSON event does not name the path that displaced another; it is the
   ACCEPTED event just before the DISPLACED ones.
+- The advisor is a local candidate generator with known defects (OR
+  clauses, duplicate expression indexes, hypothetical btree costing); see
+  [advisor audit](docs/technical/advisor-audit.md).
 - `excluded` reports that a join family was blocked, not who blocked it
   (`enable_*`, pg_plan_advice or another extension).
 - Not supported for non-superusers yet: probing relations with row-level
