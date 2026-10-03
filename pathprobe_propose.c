@@ -379,6 +379,9 @@ parse_spec_json(Jsonb *spec_jb)
  * ----------
  */
 static set_rel_pathlist_hook_type prev_propose_rel_hook = NULL;
+#ifdef HAVE_PATHPROBE_INDEX_PATH_HOOK
+static pathprobe_index_path_hook_type prev_index_path_hook = NULL;
+#endif
 
 /*
  * propose_match_pathkeys - canonical pathkeys for a candidate claim.
@@ -1236,6 +1239,11 @@ hypo_inject_one(PlannerInfo *root, RelOptInfo *rel,
 	ListCell   *lc;
 
 	h->ioi = hypo_build_indexoptinfo(root, rel, rte, h);
+	h->rel_relids = pathprobe_active_log ?
+		pelog_intern_relids(pathprobe_active_log, rel->relids) :
+		bms_copy(rel->relids);
+	/* create_index_paths() skips it at top level; OR arms may still use it */
+	h->pred_not_implied = (h->ioi->indpred != NIL && !h->ioi->predOK);
 
 	/*
 	 * Swap in just the hypothetical index and regenerate index paths.  No
@@ -1523,14 +1531,21 @@ retag_proposed_events(PathEventLog *log)
  */
 /*
  * Does any range table, at any query level, hold a plain relation with this
- * unqualified name?  Uses the same name test as propose_inject_hook.
- * Inheritance and partition children are not in the parse tree, so a
- * target named by a child relation is reported as not found.
+ * oid, or if the oid is invalid, this unqualified name?  Uses the same tests
+ * as propose_inject_hook.  Inheritance and partition children are not in
+ * the parse tree, so a target named by a child relation is reported as not
+ * found.
  */
-static bool
-relname_in_query_walker(Node *node, void *context)
+typedef struct TargetRel
 {
-	const char *relname = (const char *) context;
+	const char *relname;
+	Oid			relid;
+} TargetRel;
+
+static bool
+target_in_query_walker(Node *node, void *context)
+{
+	TargetRel  *target = (TargetRel *) context;
 
 	if (node == NULL)
 		return false;
@@ -1541,14 +1556,80 @@ relname_in_query_walker(Node *node, void *context)
 
 		if (rte->rtekind != RTE_RELATION)
 			return false;
+		if (OidIsValid(target->relid))
+			return rte->relid == target->relid;
 		name = get_rel_name(rte->relid);
-		return name != NULL && strcmp(name, relname) == 0;
+		return name != NULL && strcmp(name, target->relname) == 0;
 	}
 	if (IsA(node, Query))
-		return query_tree_walker((Query *) node, relname_in_query_walker,
+		return query_tree_walker((Query *) node, target_in_query_walker,
 								 context, QTW_EXAMINE_RTES_BEFORE);
-	return expression_tree_walker(node, relname_in_query_walker, context);
+	return expression_tree_walker(node, target_in_query_walker, context);
 }
+
+static bool
+target_in_query(List *querytree_list, const char *relname, Oid relid)
+{
+	TargetRel	target = {relname, relid};
+
+	return target_in_query_walker((Node *) querytree_list, &target);
+}
+
+#ifdef HAVE_PATHPROBE_INDEX_PATH_HOOK
+/*
+ * Record build_index_paths() decisions for the hypothetical indexes of the
+ * active proposal.  Their IndexOptInfo is built by pathprobe, so pointer
+ * identity is exact; real indexes are not recorded.
+ */
+static void
+hypo_index_build_hook(PlannerInfo *root, const PathprobeIndexBuildInfo *info)
+{
+	ListCell   *lc;
+
+	if (prev_index_path_hook)
+		prev_index_path_hook(root, info);
+
+	if (active_proposal == NULL || !info->index->hypothetical)
+		return;
+
+	foreach(lc, active_proposal->hypo)
+	{
+		HypoIndexSpec *h = (HypoIndexSpec *) lfirst(lc);
+
+		if (h->ioi != info->index)
+			continue;
+
+		switch (info->callsite)
+		{
+			case PATHPROBE_INDEX_CALL_PLAIN:
+				h->build_plain++;
+				break;
+			case PATHPROBE_INDEX_CALL_SAOP_BITMAP:
+				h->build_saop++;
+				break;
+			case PATHPROBE_INDEX_CALL_OR_ARM:
+				h->build_or_arm++;
+				break;
+		}
+		switch (info->outcome)
+		{
+			case PATHPROBE_INDEX_GENERATED:
+				h->build_generated++;
+				break;
+			case PATHPROBE_INDEX_NO_USEFUL_INPUT:
+				h->build_notgen |= HYPO_NOTGEN_NO_USEFUL_INPUT;
+				break;
+			case PATHPROBE_INDEX_NO_LEADING_CLAUSE:
+				h->build_notgen |= HYPO_NOTGEN_NO_LEADING_CLAUSE;
+				break;
+			case PATHPROBE_INDEX_SCANTYPE_UNSUPPORTED:
+				h->build_notgen |= HYPO_NOTGEN_SCANTYPE;
+				break;
+		}
+		break;
+	}
+}
+#endif
 
 static PathProbeReport *
 pathprobe_propose_internal(const char *query_string,
@@ -1573,6 +1654,9 @@ pathprobe_propose_internal(const char *query_string,
 									 "PathProbeProposedLog",
 									 ALLOCSET_DEFAULT_SIZES);
 	log = pelog_create(log_mcxt);
+#ifdef HAVE_PATHPROBE_INDEX_PATH_HOOK
+	log->coverage |= PP_COV_INDEX_BUILD;
+#endif
 
 	/* Activate pathprobe hooks */
 	pathprobe_active_log = log;
@@ -1603,6 +1687,10 @@ pathprobe_propose_internal(const char *query_string,
 	/* Install proposal inject hook (chains probe0) */
 	prev_propose_rel_hook = set_rel_pathlist_hook;
 	set_rel_pathlist_hook = propose_inject_hook;
+#ifdef HAVE_PATHPROBE_INDEX_PATH_HOOK
+	prev_index_path_hook = pathprobe_index_path_hook;
+	pathprobe_index_path_hook = hypo_index_build_hook;
+#endif
 
 	PG_TRY();
 	{
@@ -1639,8 +1727,16 @@ pathprobe_propose_internal(const char *query_string,
 
 				if (!spec->target_in_query)
 					spec->target_in_query =
-						relname_in_query_walker((Node *) querytree_list,
-												(void *) spec->relname);
+						target_in_query(querytree_list, spec->relname,
+										InvalidOid);
+			}
+			foreach(sc, *hypo)
+			{
+				HypoIndexSpec *h = (HypoIndexSpec *) lfirst(sc);
+
+				if (!h->target_in_query)
+					h->target_in_query =
+						target_in_query(querytree_list, h->relname, h->relid);
 			}
 
 			/* structured hypo indexes must target vetted relations */
@@ -1710,6 +1806,9 @@ pathprobe_propose_internal(const char *query_string,
 		if (hint_nest > 0)
 			AtEOXact_GUC(true, hint_nest);
 		set_rel_pathlist_hook = prev_propose_rel_hook;
+#ifdef HAVE_PATHPROBE_INDEX_PATH_HOOK
+		pathprobe_index_path_hook = prev_index_path_hook;
+#endif
 		active_proposal = NULL;
 		pathprobe_active_log = NULL;
 		pathprobe_active_opts = NULL;
@@ -1719,6 +1818,9 @@ pathprobe_propose_internal(const char *query_string,
 
 	/* Restore hooks */
 	set_rel_pathlist_hook = prev_propose_rel_hook;
+#ifdef HAVE_PATHPROBE_INDEX_PATH_HOOK
+	pathprobe_index_path_hook = prev_index_path_hook;
+#endif
 	active_proposal = NULL;
 	*hypo = state.hypo;			/* advise mode may have generated entries */
 	pathprobe_active_log = NULL;
@@ -1778,6 +1880,199 @@ pathprobe_propose_internal(const char *query_string,
 		report->baseline_cost = propose_baseline_cost(query_string);
 
 	return report;
+}
+
+/*
+ * Hypothetical index fate.
+ *
+ * One hypo index yields several paths (plain, parameterized, bitmap, both
+ * scan directions), so its fate aggregates the labeled add_path() events of
+ * all of them at the index's relation, after the generation decision
+ * recorded by the index path hook.  As for candidates, a missing event
+ * moves the state only when the point that would report it is covered;
+ * otherwise the result is unknown.
+ */
+typedef struct HypoCounts
+{
+	int			accepted;
+	int			rejected;
+	int			survived;
+	int			displaced;
+	bool		best_set;
+	Cost		best;
+} HypoCounts;
+
+typedef enum HypoFate
+{
+	HYPO_TARGET_NOT_FOUND,		/* no such relation in the query */
+	HYPO_NOT_EXAMINED,			/* build_index_paths() never called for it */
+	HYPO_NOT_GENERATED,			/* called, no path built */
+	HYPO_REJECTED,				/* every observed add_path() rejected it */
+	HYPO_DISPLACED,				/* accepted, all accepted paths displaced */
+	HYPO_SURVIVED_AT_POINT,		/* in the pathlist after injection;
+								 * acceptance/displacement not covered */
+	HYPO_SURVIVED,				/* accepted paths not all displaced */
+	HYPO_UNKNOWN,
+	HYPO_ILLEGAL				/* contradicts a covered decision point */
+} HypoFate;
+
+/*
+ * Labeled events of h's paths.  With base_only, only events at the rel h
+ * was injected into, matched by planner relids: an index path carried into
+ * an upper rel unchanged is labeled too, and is not counted then.
+ */
+static void
+hypo_count_events(PathEventLog *log, HypoIndexSpec * h, HypoCounts * c,
+				  bool base_only)
+{
+	char	   *tag = psprintf("hypo:%s", h->name);
+	int			i;
+
+	memset(c, 0, sizeof(*c));
+	for (i = 0; i < log->nevents; i++)
+	{
+		PathEvent  *ev = &log->events[i];
+
+		if (!ev->label || strcmp(ev->label, tag) != 0)
+			continue;
+		if (base_only &&
+			(h->rel_relids == NULL || !bms_equal(ev->relids, h->rel_relids)))
+			continue;
+		if (ev->kind == PEK_ACCEPTED)
+			c->accepted++;
+		else if (ev->kind == PEK_REJECTED)
+			c->rejected++;
+		else if (ev->kind == PEK_SURVIVED)
+			c->survived++;
+		else if (ev->kind == PEK_DISPLACED)
+			c->displaced++;
+		if (!c->best_set || ev->cost_total < c->best)
+		{
+			c->best = ev->cost_total;
+			c->best_set = true;
+		}
+	}
+	pfree(tag);
+}
+
+/*
+ * *reason is set for NOT_EXAMINED and UNKNOWN; NOT_GENERATED reasons are
+ * the HYPO_NOTGEN_* bits in h->build_notgen.
+ */
+static HypoFate
+hypo_fate(PathEventLog *log, HypoIndexSpec * h, const char **reason)
+{
+	uint32		acc_disp = PP_COV_ACCEPTED | PP_COV_DISPLACED;
+	HypoCounts	base;
+	HypoCounts *c = &base;
+	bool		observed;
+
+	hypo_count_events(log, h, c, true);
+	observed = (c->accepted + c->rejected + c->survived + c->displaced) > 0;
+	*reason = NULL;
+	if (!h->injected)
+	{
+		if (!h->target_in_query)
+			return HYPO_TARGET_NOT_FOUND;
+		*reason = "rel_not_planned";
+		return HYPO_NOT_EXAMINED;
+	}
+
+	if (log->coverage & PP_COV_INDEX_BUILD)
+	{
+		int			calls = h->build_plain + h->build_saop + h->build_or_arm;
+
+		if (calls == 0)
+		{
+			/* the only skip before the call that applies to a hypo index */
+			if (observed || !h->pred_not_implied)
+				return HYPO_ILLEGAL;
+			*reason = "predicate_not_implied";
+			return HYPO_NOT_EXAMINED;
+		}
+		if (h->build_generated == 0)
+			return observed ? HYPO_ILLEGAL : HYPO_NOT_GENERATED;
+	}
+	else if (!observed)
+	{
+		/* an OR arm may still have examined a partial index */
+		*reason = h->pred_not_implied ? "predicate_not_implied" :
+			"index_build_not_covered";
+		return HYPO_UNKNOWN;
+	}
+
+	/* paths were generated; what happened to them in add_path() */
+	if ((log->coverage & acc_disp) == acc_disp)
+	{
+		if (c->displaced > c->accepted ||
+			(c->survived > 0 && c->accepted == 0))
+			return HYPO_ILLEGAL;
+		if (c->accepted > c->displaced)
+			return HYPO_SURVIVED;
+		if (c->accepted > 0)
+			return HYPO_DISPLACED;
+		if (c->rejected > 0)
+			return HYPO_REJECTED;
+	}
+	else if (c->survived > 0)
+		return HYPO_SURVIVED_AT_POINT;
+
+	/* e.g. only inside a BitmapAnd/BitmapOr, which carries no label */
+	*reason = "outcome_not_observed";
+	return HYPO_UNKNOWN;
+}
+
+static const char *
+hypo_fate_text(HypoFate f)
+{
+	switch (f)
+	{
+		case HYPO_TARGET_NOT_FOUND:
+			return "target_not_found";
+		case HYPO_NOT_EXAMINED:
+			return "not_examined";
+		case HYPO_NOT_GENERATED:
+			return "not_generated";
+		case HYPO_REJECTED:
+			return "rejected";
+		case HYPO_DISPLACED:
+			return "displaced";
+		case HYPO_SURVIVED_AT_POINT:
+			return "survived_at_point";
+		case HYPO_SURVIVED:
+			return "survived";
+		case HYPO_ILLEGAL:
+			return "inconsistent";
+		case HYPO_UNKNOWN:
+		default:
+			return "unknown";
+	}
+}
+
+static void
+hypo_notgen_append(StringInfo out, uint32 bits, bool json_form)
+{
+	static const struct
+	{
+		uint32		bit;
+		const char *name;
+	}			names[] = {
+		{HYPO_NOTGEN_NO_USEFUL_INPUT, "no_useful_input"},
+		{HYPO_NOTGEN_NO_LEADING_CLAUSE, "no_leading_clause"},
+		{HYPO_NOTGEN_SCANTYPE, "scantype_unsupported"},
+	};
+	bool		first = true;
+
+	for (int i = 0; i < lengthof(names); i++)
+	{
+		if (!(bits & names[i].bit))
+			continue;
+		if (json_form)
+			appendStringInfo(out, "%s\"%s\"", first ? "" : ",", names[i].name);
+		else
+			appendStringInfo(out, "%s%s", first ? "" : ",", names[i].name);
+		first = false;
+	}
 }
 
 /* ----------
@@ -1880,46 +2175,35 @@ pathprobe_propose(PG_FUNCTION_ARGS)
 				for (int c = 0; c < h->ncols; c++)
 					appendStringInfo(&out, "%s%s", c ? "," : "", h->colnames[c]);
 			}
-			if (!h->injected)
-			{
-				appendStringInfo(&out, "%s  not injected (rel not in query)\n",
-								 h->sql ? "]" : ")");
-				continue;
-			}
 			{
 				const char *closer = h->sql ? "]" : ")";
-				int			acc = 0,
-							rej = 0,
-							surv = 0;
-				bool		best_set = false;
-				Cost		best = 0.0;
-				char	   *tag = psprintf("hypo:%s", h->name);
-				int			i;
+				HypoCounts	hc;
+				HypoFate	hf;
+				const char *reason;
 
-				for (i = 0; i < report->log->nevents; i++)
+				hypo_count_events(report->log, h, &hc, false);
+				hf = hypo_fate(report->log, h, &reason);
+				if (!h->injected)
+					appendStringInfo(&out, "%s  not injected", closer);
+				else
 				{
-					PathEvent  *ev = &report->log->events[i];
-
-					if (!ev->label || strcmp(ev->label, tag) != 0)
-						continue;
-					if (ev->kind == PEK_ACCEPTED)
-						acc++;
-					else if (ev->kind == PEK_REJECTED)
-						rej++;
-					else if (ev->kind == PEK_SURVIVED)
-						surv++;
-					if (!best_set || ev->cost_total < best)
-					{
-						best = ev->cost_total;
-						best_set = true;
-					}
+					appendStringInfo(&out, "%s  injected: acc=%d rej=%d surv=%d",
+									 closer, hc.accepted, hc.rejected,
+									 hc.survived);
+					if (hc.best_set)
+						appendStringInfo(&out, "  best=%.2f", hc.best);
+					if (h->in_plan)
+						appendStringInfoString(&out, "  IN PLAN");
 				}
-				appendStringInfo(&out, "%s  injected: acc=%d rej=%d surv=%d",
-								 closer, acc, rej, surv);
-				if (best_set)
-					appendStringInfo(&out, "  best=%.2f", best);
-				if (h->in_plan)
-					appendStringInfoString(&out, "  IN PLAN");
+				appendStringInfo(&out, "  fate=%s", hypo_fate_text(hf));
+				if (reason)
+					appendStringInfo(&out, "(%s)", reason);
+				else if (hf == HYPO_NOT_GENERATED)
+				{
+					appendStringInfoChar(&out, '(');
+					hypo_notgen_append(&out, h->build_notgen, false);
+					appendStringInfoChar(&out, ')');
+				}
 				appendStringInfoChar(&out, '\n');
 			}
 		}
@@ -2581,32 +2865,12 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 			foreach(lch, hypo)
 			{
 				HypoIndexSpec *h = (HypoIndexSpec *) lfirst(lch);
-				char	   *hlabel = psprintf("hypo:%s", h->name);
-				int			ha = 0,
-							hr = 0,
-							hs = 0;
-				Cost		hbest = 0.0;
-				bool		hbest_set = false;
-				int			ei;
+				HypoCounts	hc;
+				HypoFate	hf;
+				const char *reason;
 
-				for (ei = 0; ei < report->log->nevents; ei++)
-				{
-					PathEvent  *ev = &report->log->events[ei];
-
-					if (!ev->label || strcmp(ev->label, hlabel) != 0)
-						continue;
-					if (ev->kind == PEK_ACCEPTED)
-						ha++;
-					else if (ev->kind == PEK_REJECTED)
-						hr++;
-					else if (ev->kind == PEK_SURVIVED)
-						hs++;
-					if (!hbest_set || ev->cost_total < hbest)
-					{
-						hbest = ev->cost_total;
-						hbest_set = true;
-					}
-				}
+				hypo_count_events(report->log, h, &hc, false);
+				hf = hypo_fate(report->log, h, &reason);
 				if (!hfirst)
 					appendStringInfoChar(&out, ',');
 				hfirst = false;
@@ -2620,10 +2884,28 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 								 h->injected ? "true" : "false",
 								 h->in_plan ? "true" : "false");
 				appendStringInfo(&out,
-								 ",\"accepted\":%d,\"rejected\":%d,\"survived\":%d",
-								 ha, hr, hs);
-				if (hbest_set)
-					appendStringInfo(&out, ",\"best_cost\":%.2f", hbest);
+								 ",\"accepted\":%d,\"rejected\":%d,\"survived\":%d"
+								 ",\"displaced\":%d",
+								 hc.accepted, hc.rejected, hc.survived,
+								 hc.displaced);
+				if (hc.best_set)
+					appendStringInfo(&out, ",\"best_cost\":%.2f", hc.best);
+				appendStringInfo(&out, ",\"fate\":\"%s\"", hypo_fate_text(hf));
+				if (reason)
+					appendStringInfo(&out, ",\"fate_reason\":\"%s\"", reason);
+				if (report->log->coverage & PP_COV_INDEX_BUILD)
+				{
+					appendStringInfo(&out,
+									 ",\"index_build\":{\"calls\":{\"plain\":%d"
+									 ",\"saop_bitmap\":%d,\"or_arm\":%d}"
+									 ",\"generated\":%d,\"not_generated\":[",
+									 h->build_plain, h->build_saop,
+									 h->build_or_arm, h->build_generated);
+					hypo_notgen_append(&out, h->build_notgen, true);
+					appendStringInfoString(&out, "]}");
+				}
+				else
+					appendStringInfoString(&out, ",\"index_build\":null");
 				appendStringInfoChar(&out, '}');
 			}
 		}

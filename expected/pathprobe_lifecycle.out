@@ -43,9 +43,9 @@ ORDER BY n;
 -- 3. coverage: propose observes acceptance and displacement; with min_gap
 -- set, rejections are not covered
 SELECT pathprobe_propose_json('SELECT * FROM lc_a WHERE id = 7', '{"advise":true}')::jsonb->'coverage' AS coverage;
-                                                                                       coverage                                                                                        
----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- {"index_build": false, "join_excluded": true, "add_path_accepted": true, "add_path_precheck": true, "add_path_rejected": true, "survived_snapshot": true, "add_path_displaced": true}
+                                                                                       coverage                                                                                       
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"index_build": true, "join_excluded": true, "add_path_accepted": true, "add_path_precheck": true, "add_path_rejected": true, "survived_snapshot": true, "add_path_displaced": true}
 (1 row)
 
 SET pathprobe.min_gap = 1;

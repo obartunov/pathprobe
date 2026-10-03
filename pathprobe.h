@@ -192,7 +192,8 @@ typedef struct PathEventLog
 #define PP_COV_DISPLACED	0x08	/* add_path() displacement (core patch) */
 #define PP_COV_PRECHECK		0x10	/* add_path_precheck() skips (core patch) */
 #define PP_COV_EXCLUDED		0x20	/* join methods excluded at join setup */
-#define PP_COV_INDEX_BUILD	0x40	/* index path build decision (not yet) */
+#define PP_COV_INDEX_BUILD	0x40	/* build_index_paths() decision for
+									 * hypothetical indexes (propose) */
 
 extern uint32 pathprobe_coverage(void);
 

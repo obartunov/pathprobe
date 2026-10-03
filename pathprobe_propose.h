@@ -83,7 +83,22 @@ typedef struct HypoIndexSpec
 	bool		injected;
 	bool		in_plan;		/* fake oid found in the final plan */
 	IndexOptInfo *ioi;			/* identity for event labeling */
+	Relids		rel_relids;		/* planner relids of the rel it was injected
+								 * into (range-table indexes, not an OID) */
+	bool		target_in_query;	/* its relation appears in a range table */
+	bool		pred_not_implied;	/* partial; restrictions do not imply it */
+
+	/* build_index_paths() decisions seen for ioi (index path hook) */
+	int			build_plain;	/* calls from get_index_paths() */
+	int			build_saop;		/* non-native SAOP bitmap retry */
+	int			build_or_arm;	/* calls from build_paths_for_OR() */
+	int			build_generated;	/* calls that returned paths */
+	uint32		build_notgen;	/* HYPO_NOTGEN_* seen in empty calls */
 }			HypoIndexSpec;
+
+#define HYPO_NOTGEN_NO_USEFUL_INPUT		0x01
+#define HYPO_NOTGEN_NO_LEADING_CLAUSE	0x02
+#define HYPO_NOTGEN_SCANTYPE			0x04
 
 
 /* ----------
