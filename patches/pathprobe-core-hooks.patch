@@ -42,10 +42,10 @@ index 713283a..f68c6d3 100644
  }
  
 diff --git a/src/backend/optimizer/util/pathnode.c b/src/backend/optimizer/util/pathnode.c
-index 73518c8..d2f23af 100644
+index 73518c8..fcb8d2f 100644
 --- a/src/backend/optimizer/util/pathnode.c
 +++ b/src/backend/optimizer/util/pathnode.c
-@@ -55,6 +55,31 @@ static bool pathlist_is_reparameterizable_by_child(List *pathlist,
+@@ -55,6 +55,32 @@ static bool pathlist_is_reparameterizable_by_child(List *pathlist,
  												   RelOptInfo *child_rel);
  
  
@@ -56,6 +56,7 @@ index 73518c8..d2f23af 100644
 + * pathprobe_path_rejected_hook: new_path dominated; dominated_by is
 + *   cheapest_total_path proxy. new_path pfree'd after hook returns.
 + * pathprobe_path_accepted_hook: new_path survived; dominated_list may be NIL.
++ *   Paths in dominated_list are freed only after the hook returns.
 + */
 +typedef void (*pathprobe_path_rejected_hook_type)(RelOptInfo *rel,
 +												  Path *new_path,
@@ -77,7 +78,7 @@ index 73518c8..d2f23af 100644
  /*****************************************************************************
   *		MISC. PATH UTILITIES
   *****************************************************************************/
-@@ -460,6 +485,7 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
+@@ -460,6 +486,7 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
  {
  	bool		accept_new = true;	/* unless we find a superior old path */
  	int			insert_at = 0;	/* where to insert new item */
@@ -85,25 +86,24 @@ index 73518c8..d2f23af 100644
  	List	   *new_path_pathkeys;
  	ListCell   *p1;
  
-@@ -627,6 +653,8 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
+@@ -627,7 +654,9 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
  			/*
  			 * Delete the data pointed-to by the deleted cell, if possible
  			 */
+-			if (!IsA(old_path, IndexPath))
 +			if (pathprobe_path_accepted_hook)
 +				dominated_paths = lappend(dominated_paths, old_path);
- 			if (!IsA(old_path, IndexPath))
++			else if (!IsA(old_path, IndexPath))
  				pfree(old_path);
  		}
-@@ -653,12 +681,26 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
+ 		else
+@@ -653,16 +682,39 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
  
  	if (accept_new)
  	{
 +		/* new_path survived — call accepted hook with displaced list */
 +		if (pathprobe_path_accepted_hook)
-+		{
 +			pathprobe_path_accepted_hook(parent_rel, new_path, dominated_paths);
-+			list_free(dominated_paths);
-+		}
  		/* Accept the new path: insert it at proper place in pathlist */
  		parent_rel->pathlist =
  			list_insert_nth(parent_rel->pathlist, insert_at, new_path);
@@ -121,6 +121,22 @@ index 73518c8..d2f23af 100644
  		/* Reject and recycle the new path */
  		if (!IsA(new_path, IndexPath))
  			pfree(new_path);
+ 	}
++
++	/*
++	 * Free the old paths the loop removed but kept for the accepted hook.
++	 * This is needed on the reject path too: the loop may remove old paths
++	 * before it finds one that dominates new_path.
++	 */
++	foreach_ptr(Path, dpath, dominated_paths)
++	{
++		if (!IsA(dpath, IndexPath))
++			pfree(dpath);
++	}
++	list_free(dominated_paths);
+ }
+ 
+ /*
 diff --git a/src/include/optimizer/pathnode.h b/src/include/optimizer/pathnode.h
 index e8db321..00843de 100644
 --- a/src/include/optimizer/pathnode.h
