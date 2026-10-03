@@ -178,7 +178,23 @@ typedef struct PathEventLog
 	PathRTMap  *rtmap;			/* optional: rtindex -> relname             */
 	PathRelidsPool relids_pool; /* interned relids, avoid per-event bms_copy */
 	bool		events_truncated;	/* max_events hit: picture incomplete */
+	uint32		coverage;		/* PP_COV_* decision points observed */
 } PathEventLog;
+
+/*
+ * Decision points a probe run observes.  A missing event means "did not
+ * happen" only if the point that would report it is covered; otherwise the
+ * outcome is unknown.  Fixed when the event log is created.
+ */
+#define PP_COV_SURVIVED		0x01	/* pathlist snapshot at set_rel_pathlist */
+#define PP_COV_REJECTED		0x02	/* add_path() rejection (core patch) */
+#define PP_COV_ACCEPTED		0x04	/* add_path() acceptance (core patch) */
+#define PP_COV_DISPLACED	0x08	/* add_path() displacement (core patch) */
+#define PP_COV_PRECHECK		0x10	/* add_path_precheck() skips (core patch) */
+#define PP_COV_EXCLUDED		0x20	/* join methods excluded at join setup */
+#define PP_COV_INDEX_BUILD	0x40	/* index path build decision (not yet) */
+
+extern uint32 pathprobe_coverage(void);
 
 /* ----------
  * PathProbeReport - second layer

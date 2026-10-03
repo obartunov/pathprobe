@@ -249,6 +249,24 @@ pathprobe_qfp(void)
  * -------------------------------------------------------------------------
  */
 
+uint32
+pathprobe_coverage(void)
+{
+	uint32		cov = PP_COV_SURVIVED;
+
+#ifdef HAVE_PATHPROBE_HOOKS
+	cov |= PP_COV_PRECHECK;
+	/* with min_gap > 0 the rejected hook drops events whose gap is 0 */
+	if (pathprobe_min_gap <= 0.0)
+		cov |= PP_COV_REJECTED;
+	if (pathprobe_log_accepted)
+		cov |= PP_COV_ACCEPTED | PP_COV_DISPLACED;
+#endif
+	if (pathprobe_enable_probe2)
+		cov |= PP_COV_EXCLUDED;
+	return cov;
+}
+
 PathEventLog *
 pelog_create(MemoryContext mcxt)
 {
@@ -260,6 +278,7 @@ pelog_create(MemoryContext mcxt)
 	log->events = palloc(log->capacity * sizeof(PathEvent));
 	log->nevents = 0;
 	log->mcxt = mcxt;
+	log->coverage = pathprobe_coverage();
 
 	MemoryContextSwitchTo(old);
 	return log;
@@ -712,17 +731,8 @@ render_text(PathProbeReport *report, StringInfo out, PathProbeOpts *opts)
 	PathEventLog *log = report->log;
 	int			i;
 
-	bool		has_probe1 = false;
+	bool		has_probe1 = (log->coverage & PP_COV_PRECHECK) != 0;
 	int			i2;
-
-	/* detect if any probe1/precheck/join-hook events are present */
-	for (i2 = 0; i2 < log->nevents; i2++)
-		if (log->events[i2].source == PATH_SOURCE_ADD_PATH ||
-			log->events[i2].source == PATH_SOURCE_PRECHECK)
-		{
-			has_probe1 = true;
-			break;
-		}
 
 	if (has_probe1)
 		appendStringInfoString(out,

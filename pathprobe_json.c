@@ -207,6 +207,17 @@ render_json(PathProbeReport *report, StringInfo out, PathProbeOpts *opts,
 					 log->events_truncated ? "true" : "false",
 					 sum->truncated ? "true" : "false",
 					 pathprobe_max_events, pathprobe_max_summary_entries);
+#define COV(bit) ((log->coverage & (bit)) ? "true" : "false")
+	appendStringInfo(out,
+					 "  \"coverage\": {\"survived_snapshot\":%s,"
+					 "\"add_path_accepted\":%s,\"add_path_rejected\":%s,"
+					 "\"add_path_displaced\":%s,\"add_path_precheck\":%s,"
+					 "\"join_excluded\":%s,\"index_build\":%s},\n",
+					 COV(PP_COV_SURVIVED), COV(PP_COV_ACCEPTED),
+					 COV(PP_COV_REJECTED), COV(PP_COV_DISPLACED),
+					 COV(PP_COV_PRECHECK), COV(PP_COV_EXCLUDED),
+					 COV(PP_COV_INDEX_BUILD));
+#undef COV
 	appendStringInfoString(out, "  \"summary\": [\n");
 	first = true;
 	for (i = 0; i < sum->nentries; i++)
