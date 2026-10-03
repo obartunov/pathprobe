@@ -558,7 +558,7 @@ QUERY PLAN
 ## Proposed candidate card (canonical minimum)
 
 pathname, target (rel-local), mode, fate
-(`survived` / `accepted -> not survived` / `rejected` / `not injected`),
+(for example `survived` / `accepted -> displaced` / `rejected` / `target not found`),
 effective winner with cost, gap, note when policy prevented a raw-cost win.
 Hypothetical indexes get a per-index line:
 `hypo:<name> [...]  injected: acc=N rej=N surv=N  best=C`.

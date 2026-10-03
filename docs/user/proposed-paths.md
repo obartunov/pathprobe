@@ -42,17 +42,22 @@ mode.winner_forbidden prevent diagnostic candidate from becoming executable winn
 fate:
 
 ```text
-survived                 remained on the relevant frontier
-survived_upper           reached the upper relation after sort/order handling
-accepted_not_survived    entered the frontier but did not survive
+target_not_found         no relation with the target name in the query
+not_examined             target in the query, never reached the injection point
 rejected                 built and rejected by add_path()
-not_injected             target relation was not present or not injectable
-unknown                  evidence was insufficient
-inconsistent             event sequence violated the expected lifecycle
+displaced                entered the pathlist, later pushed out by a better path
+survived                 in the pathlist after its add_path(), not displaced
+survived_at_point        in the pathlist after its add_path(); displacement
+                         not observable in this run
+survived_upper           the candidate path reached an upper relation
+unknown                  injected, no outcome observed
+unknown_after_accept     accepted, later outcome not observed
+inconsistent             events contradict an observed decision point
 ```
 
-For tools, `inconsistent` is not a normal outcome.  It means either a probe bug
-or an unmodeled planner action.
+A fate is never inferred from a missing event; see `coverage` in
+`docs/technical/json-format.md`.  For tools, `inconsistent` is not a normal
+outcome: it means either a probe bug or an unmodeled planner action.
 
 ## Policy boundary
 

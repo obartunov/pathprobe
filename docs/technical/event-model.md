@@ -48,22 +48,35 @@ survived  path was present in an observed frontier
 displaced previously accepted path was pushed out
 ```
 
-## Candidate fate state machine
+## Candidate fate
 
-For a labeled proposed candidate:
+A missing event is not lifecycle evidence.  The fate of a labeled proposed
+candidate is derived only from the events that were observed and from the
+run's `coverage` (see `json-format.md`): when the decision point that would
+report an outcome is not covered, the result is one of the unknown states
+rather than an outcome inferred from the absence of an event.
 
 ```text
-no events                  not_injected
-rejected event             rejected
-accepted, no survivor      accepted_not_survived
-survived at base frontier  survived
-survived at upper rel      survived_upper
-bad transition             inconsistent
-insufficient evidence      unknown
+target_not_found      no relation with the target name in the query
+not_examined          target in the query, but its rel never reached the
+                      injection point (e.g. removed by join removal)
+unknown               injected, no outcome observed
+rejected              rejected by add_path()
+unknown_after_accept  accepted, later outcome not observed
+survived_at_point     in the pathlist right after its own add_path();
+                      displacement is not covered in this run
+survived              as above, and no displacement observed while
+                      displacement is covered
+displaced             accepted, later pushed out by a better path
+survived_upper        the candidate path itself was accepted into an upper rel
+inconsistent          the events contradict a covered decision point
 ```
 
-The exact C code may refine this, but the public model should remain finite and
-explicit.  Tools should treat unknown/inconsistent as non-green outcomes.
+A SURVIVED event is positive evidence of acceptance even when acceptance is
+not covered.  `inconsistent` means only a contradiction against a covered
+point, for example SURVIVED without ACCEPTED while acceptance is covered; it
+indicates a probe bug or an unmodeled planner action.  Tools should treat
+`unknown`, `unknown_after_accept` and `inconsistent` as non-green outcomes.
 
 ## Invariants
 
@@ -71,8 +84,10 @@ Core invariants:
 
 ```text
 seq is strictly increasing in emitted events
-survived count cannot exceed accepted count for the same labeled candidate
-not_injected candidates have zero accepted/rejected/survived counts
+survived and displaced counts cannot exceed the accepted count for the same
+  labeled candidate, where acceptance is covered
+target_not_found and not_examined candidates have zero
+  accepted/rejected/survived/displaced counts
 in_plan hypothetical index implies injected=true
 truncation must be reported in limits
 summary rows are derived from events, not collected separately

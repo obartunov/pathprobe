@@ -17,6 +17,7 @@ version or the extension SQL version.
   "candidates": [],
   "events": [],
   "limits": {},
+  "coverage": {},
   "summary": []
 }
 ```
@@ -60,19 +61,25 @@ strings are JSON-escaped, never interpolated raw
   "winner_forbidden": true,
   "cost_total": 1.0,
   "rows": 10,
-  "fate": "accepted_not_survived",
+  "fate": "displaced",
   "winner_strategy": "IndexScan",
   "winner_cost": 8.0,
   "gap": -7.0,
   "event_counts": {
     "accepted": 1,
     "rejected": 0,
-    "survived": 0
+    "survived": 1,
+    "displaced": 1
   }
 }
 ```
 
+`fate` is one of the values listed in `event-model.md`.
+
 A tool should prefer `candidates[]` over any legacy single-candidate fields.
+The legacy top-level `fate` object uses the same derivation as
+`candidates[0].fate`; it is omitted when the call has no explicit candidate
+(hypothetical indexes or advisor only).
 
 ## advisor
 
@@ -121,6 +128,34 @@ was generated".
 ```
 
 If any truncation flag is true, an agent should not make a green decision.
+
+## coverage
+
+```json
+{
+  "survived_snapshot": true,
+  "add_path_accepted": true,
+  "add_path_rejected": true,
+  "add_path_displaced": true,
+  "add_path_precheck": true,
+  "join_excluded": true,
+  "index_build": false
+}
+```
+
+Which decision points this run observes.  The absence of an event is
+evidence only for a covered point: with `add_path_rejected=false`, no
+`rejected` event does not mean nothing was rejected.
+
+```text
+add_path_accepted, add_path_displaced  core hooks patch and pathprobe.log_accepted
+                                       (pathprobe_propose* turn it on)
+add_path_rejected                      core hooks patch and pathprobe.min_gap = 0
+add_path_precheck                      core hooks patch
+join_excluded                          pathprobe.enable_probe2
+survived_snapshot                      always
+index_build                            not instrumented yet
+```
 
 ## summary[]
 

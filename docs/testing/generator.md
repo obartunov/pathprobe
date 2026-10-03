@@ -67,7 +67,8 @@ The generated test should assert:
 candidates[] exists and has expected length
 candidate fate belongs to allowed alphabet
 candidate injected iff target relation is present
-not injected => no accepted/rejected/survived events
+injected=false => target_not_found
+target_not_found / not_examined => no accepted/rejected/survived/displaced events
 survived <= accepted
 hypo in_plan => injected
 hypo survived <= accepted
