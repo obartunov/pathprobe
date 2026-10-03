@@ -159,6 +159,33 @@ probe1_accepted_hook(RelOptInfo *rel, Path *new_path, List *dominated_list)
 			ev.label = MemoryContextStrdup(pathprobe_active_log->mcxt, pname);
 	}
 	pelog_append(pathprobe_active_log, &ev);
+
+	/*
+	 * One DISPLACED event per path that new_path removed from the pathlist.
+	 * The core patch keeps these paths allocated until this hook returns.
+	 */
+	foreach_ptr(Path, old_path, dominated_list)
+	{
+		PathEvent	dev;
+		const char *dname = pathprobe_path_label(old_path);
+
+		memset(&dev, 0, sizeof(dev));
+		dev.relids = ev.relids;
+		dev.relid = InvalidOid;
+		dev.pathtype = old_path->pathtype;
+		dev.cost_startup = old_path->startup_cost;
+		dev.cost_total = old_path->total_cost;
+		dev.disabled_nodes = old_path->disabled_nodes;
+		dev.kind = PEK_DISPLACED;
+		dev.origin = PATH_ORIGIN_REAL;
+		dev.source = PATH_SOURCE_ADD_PATH;
+		dev.is_parameterized = (old_path->param_info != NULL);
+		dev.gap_cost = old_path->total_cost - new_path->total_cost;
+		dev.other_pathtype = new_path->pathtype;
+		if (dname)
+			dev.label = MemoryContextStrdup(pathprobe_active_log->mcxt, dname);
+		pelog_append(pathprobe_active_log, &dev);
+	}
 }
 
 /*

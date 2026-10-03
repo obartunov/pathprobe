@@ -1940,6 +1940,8 @@ propose_candidate_fsm(PathEventLog *log, ProposedPathSpec * spec,
 		if (ev->source != PATH_SOURCE_PROPOSED ||
 			!ev->label || strcmp(ev->label, spec->pathname) != 0)
 			continue;
+		if (ev->kind == PEK_DISPLACED)
+			continue;			/* not yet part of the fate model */
 		is_upper = (ev->relids == NULL || bms_is_empty(ev->relids));
 
 		switch (ev->kind)
