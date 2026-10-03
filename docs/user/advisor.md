@@ -39,6 +39,10 @@ hypo_indexes[].in_plan         fake index was used in the final plan
 hypo_indexes[].accepted        accepted event count for this fake index label
 hypo_indexes[].rejected        rejected event count for this fake index label
 hypo_indexes[].survived        survived event count for this fake index label
+hypo_indexes[].displaced       displaced event count for this fake index label
+hypo_indexes[].fate            not_examined / not_generated / rejected /
+                               displaced / survived / ... (see event-model.md)
+hypo_indexes[].index_build     build_index_paths() calls and outcome, or null
 ```
 
 A tool should treat `hypo_indexes[].in_plan = true` as stronger evidence than

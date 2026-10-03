@@ -98,7 +98,10 @@ a `coverage` object is present; per-candidate `survived <= accepted` and
 `not_examined` imply zero event counts; `fate` within `{target_not_found,
 not_examined, unknown, rejected, unknown_after_accept, survived_at_point,
 survived, displaced, survived_upper}`; hypo `in_plan` implies `injected` and `survived <=
-accepted`; `advisor.enabled` implies `baseline_cost` and `plan_cost` with
+accepted`; hypo `fate` within its alphabet and not `inconsistent`, zero counts for `target_not_found`,
+`not_examined` and `not_generated`, not injected implies `target_not_found` or
+`not_examined`, and `index_build` present exactly when `coverage.index_build`;
+`advisor.enabled` implies `baseline_cost` and `plan_cost` with
 `query_level_benefit == baseline_cost - plan_cost`; and, when `max_events` is
 set, `events_truncated` reflects the cap and the emitted event count does not
 exceed it.

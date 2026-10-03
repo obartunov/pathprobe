@@ -109,12 +109,33 @@ advisor candidate set improved this query's final plan cost.
   "accepted": 2,
   "rejected": 1,
   "survived": 1,
-  "best_cost": 4.05
+  "displaced": 0,
+  "best_cost": 4.05,
+  "fate": "survived",
+  "index_build": {
+    "calls": {"plain": 1, "saop_bitmap": 0, "or_arm": 0},
+    "generated": 1,
+    "not_generated": []
+  }
 }
 ```
 
 `in_plan=true` is final-plan attribution.  It is stronger than "this fake index
 was generated".
+
+Counts include events of a path carried unchanged into an upper rel; `fate`
+uses only events whose planner relids equal those of the rel the index was
+injected into.  `fate_reason` is present for
+`not_examined` (`rel_not_planned`, `predicate_not_implied`) and `unknown`
+(`index_build_not_covered`, `predicate_not_implied`, `outcome_not_observed`).
+For `not_generated` the reasons are in `index_build.not_generated`:
+`no_useful_input` (no clause, ordering, useful predicate or index-only scan),
+`no_leading_clause` (AM without amoptionalkey, no clause on the first
+column), `scantype_unsupported`.
+
+`index_build` counts build_index_paths() calls for this index by call site
+and is `null` when `coverage.index_build` is false.  Real indexes are not
+reported.  See `event-model.md` for the fate alphabet.
 
 ## limits
 
@@ -154,7 +175,9 @@ add_path_rejected                      core hooks patch and pathprobe.min_gap = 
 add_path_precheck                      core hooks patch
 join_excluded                          pathprobe.enable_probe2
 survived_snapshot                      always
-index_build                            not instrumented yet
+index_build                            core hooks patch with the index path
+                                       hook; pathprobe_propose* only, for
+                                       hypothetical indexes
 ```
 
 ## summary[]

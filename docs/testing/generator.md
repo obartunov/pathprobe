@@ -72,6 +72,9 @@ target_not_found / not_examined => no accepted/rejected/survived/displaced event
 survived <= accepted
 hypo in_plan => injected
 hypo survived <= accepted
+hypo fate belongs to the hypo alphabet, and is not inconsistent
+hypo target_not_found / not_examined / not_generated => no events
+hypo injected=false => target_not_found or not_examined
 advisor enabled => baseline_cost and plan_cost exist
 limits block exists
 truncated => emitted events do not exceed cap

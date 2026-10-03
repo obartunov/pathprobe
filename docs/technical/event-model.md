@@ -78,6 +78,39 @@ point, for example SURVIVED without ACCEPTED while acceptance is covered; it
 indicates a probe bug or an unmodeled planner action.  Tools should treat
 `unknown`, `unknown_after_accept` and `inconsistent` as non-green outcomes.
 
+## Hypothetical index fate
+
+A hypothetical index yields several paths, so its fate aggregates the labeled
+events of all of them at its relation, after the build_index_paths()
+decision reported by the core index path hook.
+
+```text
+target_not_found      no relation for it in the query
+not_examined          build_index_paths() never called for it: relation not
+                      planned, or partial predicate not implied
+not_generated         called, no path built (reasons in index_build)
+rejected              every observed add_path() rejected its paths
+displaced             paths were accepted, all later displaced
+survived              some accepted path was not displaced
+survived_at_point     in the pathlist right after injection; acceptance or
+                      displacement not covered
+unknown               the deciding point is not covered, or no generated
+                      path carries the label (only inside BitmapAnd/Or)
+inconsistent          the events contradict a covered decision point
+```
+
+Without index-build coverage a hypo with no labeled event is `unknown`,
+never `not_generated`; an unproven partial predicate is then `unknown` too,
+because an OR arm can still examine such an index.  A call is made for every
+index create_index_paths() does not skip, so under coverage zero calls with
+an implied predicate, or labeled events without a generating call, is
+`inconsistent`.  `inconsistent` is part of the public alphabet but, as for
+candidates, never a green outcome; the model and combo tests fail on it.
+
+"At its relation" means the event's planner relids equal those of the rel
+the index was injected into; a path carried unchanged into an upper rel is
+counted in hypo_indexes[] but does not move the fate.
+
 ## Invariants
 
 Core invariants:
@@ -89,6 +122,10 @@ survived and displaced counts cannot exceed the accepted count for the same
 target_not_found and not_examined candidates have zero
   accepted/rejected/survived/displaced counts
 in_plan hypothetical index implies injected=true
+hypothetical target_not_found / not_examined / not_generated have zero
+  accepted/rejected/survived/displaced counts
+hypothetical fate is never inconsistent in a full-hook build
+a hypothetical index that was not injected is target_not_found or not_examined
 truncation must be reported in limits
 summary rows are derived from events, not collected separately
 ```

@@ -20,6 +20,7 @@ injected vs target relation
 not-injected consistency (target_not_found)
 survived <= accepted
 hypo in_plan -> injected
+hypo fate alphabet and not-generated/not-injected consistency
 advisor block completeness
 limits block presence and truncation behavior
 seq monotonicity
