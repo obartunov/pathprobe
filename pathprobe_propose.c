@@ -2515,22 +2515,19 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 		appendStringInfoString(&out, "{\n");
 
 		/* candidate block */
+		appendStringInfoString(&out, "  \"candidate\": {\"pathname\":");
+		pathprobe_json_str(&out, spec->pathname);
+		appendStringInfoString(&out, ",\"provider\":");
+		pathprobe_json_str(&out, spec->provider);
 		appendStringInfo(&out,
-						 "  \"candidate\": {"
-						 "\"pathname\":\"%s\","
-						 "\"provider\":\"%s\","
-						 "\"cost_total\":%.2f,"
-						 "\"rows\":%.0f,"
-						 "\"winner_forbidden\":%s"
-						 "},\n",
-						 spec->pathname, spec->provider,
+						 ",\"cost_total\":%.2f,\"rows\":%.0f,\"winner_forbidden\":%s},\n",
 						 spec->total_cost, spec->rows,
 						 spec->winner_forbidden ? "true" : "false");
 
 		/* target block */
-		appendStringInfo(&out,
-						 "  \"target\": {\"relname\":\"%s\"},\n",
-						 spec->relname);
+		appendStringInfoString(&out, "  \"target\": {\"relname\":");
+		pathprobe_json_str(&out, spec->relname);
+		appendStringInfoString(&out, "},\n");
 
 		/*
 		 * Legacy single-candidate fate.  Without an explicit candidate there

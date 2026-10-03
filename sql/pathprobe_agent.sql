@@ -12,6 +12,14 @@ ANALYZE agt;
 SELECT (pathprobe_json($q$ SELECT 'a "quote"', E'back\\slash', E'new
 line' $q$)::jsonb) IS NOT NULL AS escaping_valid;
 
+-- 1b. the legacy candidate/target fields of pathprobe_propose_json are
+-- escaped too: quotes, backslash, newline round-trip through jsonb
+SELECT j->'candidate'->>'pathname' = j->'candidates'->0->>'pathname' AS pathname_roundtrip,
+       j->'candidate'->>'provider' = E'pro"vi\\der' AS provider_roundtrip,
+       j->'target'->>'relname' = E'no "such"\nrel' AS target_roundtrip
+FROM (SELECT pathprobe_propose_json('SELECT 1',
+  '{"target":{"relname":"no \"such\"\nrel"},"candidate":{"pathname":"p\"q\\r","provider":"pro\"vi\\der"},"cost":{"total_cost":1.0}}')::jsonb j) s;
+
 -- 2. multi-candidate: separate fates, machine fields
 SELECT c->>'pathname' AS pathname,
        c->>'fate' AS fate,
