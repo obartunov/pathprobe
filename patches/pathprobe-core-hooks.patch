@@ -1,3 +1,177 @@
+diff --git a/src/backend/optimizer/path/indxpath.c b/src/backend/optimizer/path/indxpath.c
+index 3f5d4fa..f2859b4 100644
+--- a/src/backend/optimizer/path/indxpath.c
++++ b/src/backend/optimizer/path/indxpath.c
+@@ -49,6 +49,8 @@ typedef enum
+ 	ST_ANYSCAN,					/* either is okay */
+ } ScanTypeControl;
+ 
++pathprobe_index_path_hook_type pathprobe_index_path_hook = NULL;
++
+ /* Data structure for collecting qual clauses that match an index */
+ typedef struct
+ {
+@@ -107,7 +109,8 @@ static List *build_index_paths(PlannerInfo *root, RelOptInfo *rel,
+ 							   IndexOptInfo *index, IndexClauseSet *clauses,
+ 							   bool useful_predicate,
+ 							   ScanTypeControl scantype,
+-							   bool *skip_nonnative_saop);
++							   bool *skip_nonnative_saop,
++							   PathprobeIndexCallSite callsite);
+ static List *build_paths_for_OR(PlannerInfo *root, RelOptInfo *rel,
+ 								List *clauses, List *other_clauses);
+ static List *generate_bitmap_or_paths(PlannerInfo *root, RelOptInfo *rel,
+@@ -728,7 +731,8 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
+ 								   index, clauses,
+ 								   index->predOK,
+ 								   ST_ANYSCAN,
+-								   &skip_nonnative_saop);
++								   &skip_nonnative_saop,
++								   PATHPROBE_INDEX_CALL_PLAIN);
+ 
+ 	/*
+ 	 * Submit all the ones that can form plain IndexScan plans to add_path. (A
+@@ -766,11 +770,29 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
+ 									   index, clauses,
+ 									   false,
+ 									   ST_BITMAPSCAN,
+-									   NULL);
++									   NULL,
++									   PATHPROBE_INDEX_CALL_SAOP_BITMAP);
+ 		*bitindexpaths = list_concat(*bitindexpaths, indexpaths);
+ 	}
+ }
+ 
++/*
++ * Report one build_index_paths() decision to pathprobe and pass its result
++ * through.
++ */
++static List *
++pathprobe_index_build_done(PlannerInfo *root, PathprobeIndexBuildInfo *info,
++						   PathprobeIndexOutcome outcome, List *result)
++{
++	if (pathprobe_index_path_hook)
++	{
++		info->outcome = outcome;
++		info->npaths = list_length(result);
++		pathprobe_index_path_hook(root, info);
++	}
++	return result;
++}
++
+ /*
+  * build_index_paths
+  *	  Given an index and a set of index clauses for it, construct zero
+@@ -804,13 +826,15 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
+  * 'useful_predicate' indicates whether the index has a useful predicate
+  * 'scantype' indicates whether we need plain or bitmap scan support
+  * 'skip_nonnative_saop' indicates whether to accept SAOP if index AM doesn't
++ * 'callsite' tells pathprobe which caller this is
+  */
+ static List *
+ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
+ 				  IndexOptInfo *index, IndexClauseSet *clauses,
+ 				  bool useful_predicate,
+ 				  ScanTypeControl scantype,
+-				  bool *skip_nonnative_saop)
++				  bool *skip_nonnative_saop,
++				  PathprobeIndexCallSite callsite)
+ {
+ 	List	   *result = NIL;
+ 	IndexPath  *ipath;
+@@ -825,9 +849,16 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
+ 	bool		index_is_ordered;
+ 	bool		index_only_scan;
+ 	int			indexcol;
++	PathprobeIndexBuildInfo ppinfo = {0};
+ 
+ 	Assert(skip_nonnative_saop != NULL || scantype == ST_BITMAPSCAN);
+ 
++	ppinfo.rel = rel;
++	ppinfo.index = index;
++	ppinfo.callsite = callsite;
++	ppinfo.bitmap_only = (scantype == ST_BITMAPSCAN);
++	ppinfo.useful_predicate = useful_predicate;
++
+ 	/*
+ 	 * Check that index supports the desired scan type(s)
+ 	 */
+@@ -835,11 +866,15 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
+ 	{
+ 		case ST_INDEXSCAN:
+ 			if (!index->amhasgettuple)
+-				return NIL;
++				return pathprobe_index_build_done(root, &ppinfo,
++												  PATHPROBE_INDEX_SCANTYPE_UNSUPPORTED,
++												  NIL);
+ 			break;
+ 		case ST_BITMAPSCAN:
+ 			if (!index->amhasgetbitmap)
+-				return NIL;
++				return pathprobe_index_build_done(root, &ppinfo,
++												  PATHPROBE_INDEX_SCANTYPE_UNSUPPORTED,
++												  NIL);
+ 			break;
+ 		case ST_ANYSCAN:
+ 			/* either or both are OK */
+@@ -898,11 +933,15 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
+ 		 * clauses.)
+ 		 */
+ 		if (index_clauses == NIL && !index->amoptionalkey)
+-			return NIL;
++			return pathprobe_index_build_done(root, &ppinfo,
++											  PATHPROBE_INDEX_NO_LEADING_CLAUSE,
++											  NIL);
+ 	}
+ 
+ 	/* We do not want the index's rel itself listed in outer_relids */
+ 	outer_relids = bms_del_member(outer_relids, rel->relid);
++	ppinfo.required_outer = outer_relids;
++	ppinfo.has_index_clauses = (index_clauses != NIL);
+ 
+ 	/* Compute loop_count for cost estimation purposes */
+ 	loop_count = get_loop_count(root, rel->relid, outer_relids);
+@@ -956,6 +995,10 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
+ 	index_only_scan = (scantype != ST_BITMAPSCAN &&
+ 					   check_index_only(rel, index));
+ 
++	/* step 5 reuses useful_pathkeys, so record the forward answer now */
++	ppinfo.forward_pathkeys_useful = (useful_pathkeys != NIL);
++	ppinfo.index_only_scan = index_only_scan;
++
+ 	/*
+ 	 * 4. Generate an indexscan path if there are relevant restriction clauses
+ 	 * in the current clauses, OR the index ordering is potentially useful for
+@@ -1016,6 +1059,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
+ 											  BackwardScanDirection);
+ 		useful_pathkeys = truncate_useless_pathkeys(root, rel,
+ 													index_pathkeys);
++		ppinfo.backward_pathkeys_useful = (useful_pathkeys != NIL);
+ 		if (useful_pathkeys != NIL)
+ 		{
+ 			ipath = create_index_path(root, index,
+@@ -1058,7 +1102,10 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
+ 		}
+ 	}
+ 
+-	return result;
++	return pathprobe_index_build_done(root, &ppinfo,
++									  result != NIL ? PATHPROBE_INDEX_GENERATED :
++									  PATHPROBE_INDEX_NO_USEFUL_INPUT,
++									  result);
+ }
+ 
+ /*
+@@ -1164,7 +1211,8 @@ build_paths_for_OR(PlannerInfo *root, RelOptInfo *rel,
+ 									   index, &clauseset,
+ 									   useful_predicate,
+ 									   ST_BITMAPSCAN,
+-									   NULL);
++									   NULL,
++									   PATHPROBE_INDEX_CALL_OR_ARM);
+ 		result = list_concat(result, indexpaths);
+ 	}
+ 
 diff --git a/src/backend/optimizer/path/joinpath.c b/src/backend/optimizer/path/joinpath.c
 index 713283a..f68c6d3 100644
 --- a/src/backend/optimizer/path/joinpath.c
@@ -185,3 +359,62 @@ index e8db321..00843de 100644
  /* Hook for plugins to get control in build_simple_rel() */
  typedef void (*build_simple_rel_hook_type) (PlannerInfo *root,
  											RelOptInfo *rel,
+diff --git a/src/include/optimizer/paths.h b/src/include/optimizer/paths.h
+index d3853d1..d19caa3 100644
+--- a/src/include/optimizer/paths.h
++++ b/src/include/optimizer/paths.h
+@@ -79,6 +79,54 @@ extern void generate_partitionwise_join_paths(PlannerInfo *root,
+  * indxpath.c
+  *	  routines to generate index paths
+  */
++
++/*
++ * pathprobe index path hook: called once for every build_index_paths() call,
++ * with the outcome of that call and the inputs of its decision.  A missing
++ * call means the index was not examined (e.g. an unproven partial index
++ * predicate), not that no path was generated.  Pointers are valid only
++ * during the call.  Defining the macro lets an extension detect the hook.
++ */
++#define HAVE_PATHPROBE_INDEX_PATH_HOOK 1
++
++typedef enum PathprobeIndexCallSite
++{
++	PATHPROBE_INDEX_CALL_PLAIN,		/* get_index_paths(), plain and bitmap */
++	PATHPROBE_INDEX_CALL_SAOP_BITMAP,	/* get_index_paths(), non-native SAOP */
++	PATHPROBE_INDEX_CALL_OR_ARM,	/* build_paths_for_OR() */
++} PathprobeIndexCallSite;
++
++typedef enum PathprobeIndexOutcome
++{
++	PATHPROBE_INDEX_GENERATED,	/* npaths > 0 */
++	PATHPROBE_INDEX_NO_USEFUL_INPUT,	/* no clause, ordering, predicate or
++										 * index-only scan */
++	PATHPROBE_INDEX_NO_LEADING_CLAUSE,	/* !amoptionalkey, no clause on the
++										 * first column */
++	PATHPROBE_INDEX_SCANTYPE_UNSUPPORTED,	/* AM lacks the requested scan
++											 * type; nothing else examined */
++} PathprobeIndexOutcome;
++
++typedef struct PathprobeIndexBuildInfo
++{
++	RelOptInfo *rel;
++	IndexOptInfo *index;
++	PathprobeIndexCallSite callsite;
++	PathprobeIndexOutcome outcome;
++	Relids		required_outer; /* NULL unless clause analysis completed */
++	bool		bitmap_only;	/* only bitmap scans were requested */
++	bool		has_index_clauses;
++	bool		forward_pathkeys_useful;
++	bool		backward_pathkeys_useful;
++	bool		useful_predicate;
++	bool		index_only_scan;
++	int			npaths;			/* IndexPaths returned; partial ones excluded */
++} PathprobeIndexBuildInfo;
++
++typedef void (*pathprobe_index_path_hook_type) (PlannerInfo *root,
++												const PathprobeIndexBuildInfo *info);
++extern PGDLLIMPORT pathprobe_index_path_hook_type pathprobe_index_path_hook;
++
+ extern void create_index_paths(PlannerInfo *root, RelOptInfo *rel);
+ extern bool relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
+ 										  List *restrictlist,
