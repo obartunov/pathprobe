@@ -18,7 +18,10 @@ SELECT (e->>'seq')::int AS seq, e->>'kind' AS kind, e->>'rel' AS rel,
        e->>'pathtype' AS pathtype, (e->>'path_id')::int AS path_id,
        (e->>'displacer_path_id')::int AS displacer_path_id,
        (e->>'displacer_seq')::int AS displacer_seq,
-       e->>'other_pathtype' AS other_pathtype
+       e->>'other_pathtype' AS other_pathtype,
+       (e->>'dominator_path_id')::int AS dominator_path_id,
+       (e->>'dominator_seq')::int AS dominator_seq,
+       e->>'dominator_pathtype' AS dominator_pathtype
 FROM gr_j, jsonb_array_elements(j->'events') e;
 CREATE TEMP VIEW gr_paths AS
 SELECT (p->>'path_id')::int AS path_id, p->>'pathtype' AS pathtype,
@@ -69,6 +72,7 @@ SELECT
   (SELECT bool_and(x IN (SELECT path_id FROM gr_paths))
    FROM (SELECT path_id AS x FROM gr_ev WHERE path_id IS NOT NULL
          UNION ALL SELECT displacer_path_id FROM gr_ev WHERE displacer_path_id IS NOT NULL
+         UNION ALL SELECT dominator_path_id FROM gr_ev WHERE dominator_path_id IS NOT NULL
          UNION ALL SELECT subpath_id FROM gr_paths WHERE subpath_id IS NOT NULL
          UNION ALL SELECT outer_path_id FROM gr_paths WHERE outer_path_id IS NOT NULL
          UNION ALL SELECT inner_path_id FROM gr_paths WHERE inner_path_id IS NOT NULL) r)
@@ -85,13 +89,83 @@ SELECT
     AS rejected_ids_not_reused;
 
 -- 5. without acceptance logging there are no DISPLACED events, but ids are
--- still assigned and still resolve
+-- still assigned and still resolve; REJECTED events still name their
+-- dominator, but there is no ACCEPTED event to point at
 SET pathprobe.log_accepted = off;
 WITH j AS (SELECT pathprobe_json('SELECT * FROM gr_c c JOIN gr_o o ON o.customer_id = c.id WHERE c.id <= 5')::jsonb AS j)
 SELECT (SELECT count(*) FROM j, jsonb_array_elements(j->'events') e WHERE e->>'kind' = 'displaced') AS displaced,
        (SELECT bool_and((e->>'path_id')::int <= jsonb_array_length(j->'paths'))
-        FROM j, jsonb_array_elements(j->'events') e WHERE e ? 'path_id' AND e->>'path_id' IS NOT NULL) AS ids_resolve
+        FROM j, jsonb_array_elements(j->'events') e WHERE e ? 'path_id' AND e->>'path_id' IS NOT NULL) AS ids_resolve,
+       (SELECT count(*) > 0
+               AND bool_and((e->>'dominator_path_id')::int <= jsonb_array_length(j->'paths')
+                            AND e->'dominator_seq' = 'null')
+        FROM j, jsonb_array_elements(j->'events') e WHERE e->>'kind' = 'rejected') AS dominators_without_seq
 FROM j;
+RESET pathprobe.log_accepted;
+
+-- 6. every REJECTED event names the old path add_path() found to dominate
+-- it: that path was accepted earlier into the same rel (dominator_seq) and
+-- has the reported type
+SELECT r.seq, r.pathtype, r.dominator_pathtype,
+       a.kind = 'accepted' AND a.path_id = r.dominator_path_id
+         AND a.rel = r.rel AND a.seq < r.seq AS dominator_seq_is_its_acceptance,
+       p.pathtype = r.dominator_pathtype AS dominator_pathtype_matches,
+       r.dominator_path_id <> r.path_id AS not_itself
+FROM gr_ev r
+LEFT JOIN gr_ev a ON a.seq = r.dominator_seq
+LEFT JOIN gr_paths p ON p.path_id = r.dominator_path_id
+WHERE r.kind = 'rejected'
+ORDER BY r.seq;
+
+-- 7. paths with a list of inputs name all of them in child_path_ids, in
+-- the path's own order; every child id resolves.  Upper-rel paths have
+-- only ACCEPTED events, so acceptance logging is on.
+SET pathprobe.log_accepted = on;
+CREATE TEMP TABLE gr_multi AS
+SELECT q.name, pathprobe_json(q.sql)::jsonb AS j
+FROM (VALUES
+  ('append', 'SELECT id FROM gr_c UNION ALL SELECT id FROM gr_o ORDER BY id LIMIT 5'),
+  ('bitmap_or', 'SELECT * FROM gr_o WHERE customer_id = 1 OR id = 2'),
+  ('bitmap_and', 'SELECT * FROM gr_o WHERE customer_id < 50 AND id < 200'),
+  ('setop', 'SELECT id FROM gr_c INTERSECT SELECT customer_id FROM gr_o'),
+  ('recursive', 'WITH RECURSIVE r(n) AS (SELECT 1 UNION SELECT n + 1 FROM r WHERE n < 5) SELECT * FROM r')
+) q(name, sql);
+CREATE TEMP VIEW gr_multi_paths AS
+SELECT m.name, (p->>'path_id')::int AS path_id, p->>'pathtype' AS pathtype,
+       p->'child_path_ids' AS kids, jsonb_array_length(m.j->'paths') AS npaths, m.j
+FROM gr_multi m, jsonb_array_elements(m.j->'paths') p;
+SELECT name, pathtype, count(*) > 0 AS present,
+       bool_and(jsonb_array_length(kids) = 2) AS two_children,
+       bool_and((SELECT bool_and(c::int BETWEEN 1 AND npaths AND c::int <> path_id)
+                 FROM jsonb_array_elements_text(kids) c)) AS children_resolve,
+       string_agg(DISTINCT (SELECT string_agg(cp->>'pathtype', ',' ORDER BY o)
+                            FROM jsonb_array_elements_text(kids) WITH ORDINALITY c(id, o)
+                            JOIN jsonb_array_elements(j->'paths') cp
+                              ON (cp->>'path_id') = c.id), ' | ') AS child_types
+FROM gr_multi_paths
+WHERE kids IS NOT NULL
+GROUP BY name, pathtype
+ORDER BY name, pathtype;
+
+-- child_path_ids appears only on such paths; single-input wrappers and
+-- joins keep subpath_id / outer_path_id / inner_path_id
+SELECT count(*) AS misplaced_child_lists
+FROM gr_multi_paths
+WHERE (kids IS NOT NULL) <> (pathtype IN ('Append', 'MergeAppend', 'BitmapAnd',
+                                          'BitmapOr', 'SetOp', 'RecursiveUnion'));
+
+-- a set operation's inputs are subquery scans; their subpath is the
+-- subquery's own path
+SELECT s.pathtype, c.pathtype AS child, sub.pathtype AS child_subpath
+FROM gr_multi_paths s
+CROSS JOIN LATERAL jsonb_array_elements_text(s.kids) k(id)
+JOIN LATERAL (SELECT cp FROM jsonb_array_elements(s.j->'paths') cp
+              WHERE cp->>'path_id' = k.id) c1 ON true
+CROSS JOIN LATERAL (SELECT c1.cp->>'pathtype' AS pathtype) c
+LEFT JOIN LATERAL (SELECT sp->>'pathtype' AS pathtype FROM jsonb_array_elements(s.j->'paths') sp
+                   WHERE sp->>'path_id' = c1.cp->>'subpath_id') sub ON true
+WHERE s.name = 'setop' AND s.pathtype = 'SetOp'
+GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
 RESET pathprobe.log_accepted;
 
 DROP TABLE gr_o, gr_c;

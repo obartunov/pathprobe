@@ -106,7 +106,13 @@ CREATE VIEW ppm.v_allowed AS SELECT * FROM ppm.allowed;
 CREATE VIEW ppm.v_private AS SELECT * FROM ppm.private;
 CREATE TABLE ppm_hidden.h (id int);
 INSERT INTO ppm_hidden.h SELECT generate_series(1, 50);
-ANALYZE ppm.allowed, ppm.private, ppm.cols, ppm.rls, ppm.owned, ppm_hidden.h;
+-- indexed, for BitmapOr paths (graph child lists)
+CREATE TABLE ppm.graph (id int, v int);
+INSERT INTO ppm.graph SELECT g, g % 1000 FROM generate_series(1, 20000) g;
+CREATE INDEX ppm_graph_id ON ppm.graph (id);
+CREATE INDEX ppm_graph_v ON ppm.graph (v);
+ANALYZE ppm.allowed, ppm.private, ppm.cols, ppm.rls, ppm.owned, ppm_hidden.h,
+        ppm.graph;
 
 -- roles
 DROP ROLE IF EXISTS ppm_owner;
@@ -309,6 +315,13 @@ sub mandatory_correctness_cases {
             spec=>_cand_spec(total_cost=>0.5, provider=>'model', pathname=>'mycand'),
             allowed_fates=>undef, require=>['candidates','events'],
             dims=>{invariant=>'label_origin'}),
+        _cc(cid=>'cor_graph_child_lists',
+            query=>'SELECT id FROM ppm.graph WHERE id=42 OR v=3 '
+                  .'UNION ALL SELECT id FROM ppm.owned',
+            spec=>'{"advise":true}',
+            allowed_fates=>undef, require=>['events'],
+            expect_child_lists=>['Append','BitmapOr'],
+            dims=>{invariant=>'graph_child_lists'}),
     );
 }
 
@@ -812,7 +825,8 @@ sub check_correctness {
         push @fails, "emitted ".scalar(@ev)." events exceeds cap $cap" if defined $cap && @ev > $cap;
     }
     push @fails, "missing coverage object" unless ref($j->{coverage}) eq 'HASH';
-    # path identity: ids resolve to paths[], DISPLACED links to its displacer
+    # path identity: ids resolve to paths[], DISPLACED links to its
+    # displacer, REJECTED to its dominator, child edges resolve
     {
         my %node = map { ($_->{path_id} => $_) } grep { ref $_ eq 'HASH' } @{ $j->{paths} // [] };
         my %by_seq = map { ($_->{seq} => $_) } grep { ref $_ eq 'HASH' } @ev;
@@ -825,7 +839,27 @@ sub check_correctness {
             }
             if (!defined $e->{path_id}) { push @fails, "$k event without path_id"; next; }
             push @fails, "path_id $e->{path_id} not in paths[]" unless $node{$e->{path_id}};
+            if ($k eq 'rejected') {
+                my $dom = $e->{dominator_path_id};
+                if (!defined $dom) { push @fails, "rejected event without dominator_path_id"; next; }
+                push @fails, "dominator_path_id $dom not in paths[]" unless $node{$dom};
+                push @fails, "rejected path is its own dominator" if $dom == $e->{path_id};
+                push @fails, "dominator_pathtype does not match paths[]"
+                    if $node{$dom} && (($node{$dom}{pathtype} // '') ne ($e->{dominator_pathtype} // ''));
+                my $ds = $e->{dominator_seq};
+                next unless defined $ds;
+                my $a = $by_seq{$ds};
+                push @fails, "dominator_seq $ds is not an earlier accepted event"
+                    unless $a && ($a->{kind} // '') eq 'accepted' && $ds < $e->{seq};
+                push @fails, "dominator_path_id does not match the event at dominator_seq"
+                    if $a && (($a->{path_id} // -1) != $dom);
+                push @fails, "dominator accepted into another rel"
+                    if $a && (($a->{rel} // '') ne ($e->{rel} // ''));
+                next;
+            }
             next unless $k eq 'displaced';
+            push @fails, "displacer_path_id $e->{displacer_path_id} not in paths[]"
+                if defined $e->{displacer_path_id} && !$node{$e->{displacer_path_id}};
             my $d = $e->{displacer_seq};
             next unless defined $d;
             my $a = $by_seq{$d};
@@ -841,6 +875,21 @@ sub check_correctness {
                 push @fails, "$f $n->{$f} not in paths[]"
                     if defined $n->{$f} && !$node{$n->{$f}};
             }
+            my $multi = ($n->{pathtype} // '') =~
+                /^(Append|MergeAppend|BitmapAnd|BitmapOr|SetOp|RecursiveUnion)$/;
+            if (exists $n->{child_path_ids}) {
+                push @fails, "child_path_ids on $n->{pathtype}" unless $multi;
+                for my $c (@{ $n->{child_path_ids} // [] }) {
+                    push @fails, "child_path_ids entry $c not in paths[]" unless $node{$c};
+                }
+            }
+            elsif ($multi) {
+                push @fails, "$n->{pathtype} without child_path_ids";
+            }
+        }
+        for my $t (@{ $c->{expect_child_lists} // [] }) {
+            push @fails, "no $t path with child_path_ids"
+                unless grep { ($_->{pathtype} // '') eq $t && @{ $_->{child_path_ids} // [] } } values %node;
         }
     }
     for my $cand (@{ $j->{candidates} // [] }) {
