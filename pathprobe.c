@@ -32,6 +32,7 @@
 #include "commands/explain_format.h"
 #include "fmgr.h"
 #include "lib/stringinfo.h"
+#include "miscadmin.h"
 #include "nodes/bitmapset.h"
 #include "nodes/parsenodes.h"
 #include "nodes/pathnodes.h"
@@ -173,6 +174,10 @@ pathtype_name(NodeTag pt)
 			return "Unique";
 		case T_SetOp:
 			return "SetOp";
+		case T_RecursiveUnion:
+			return "RecursiveUnion";
+		case T_ProjectSet:
+			return "ProjectSet";
 		case T_LockRows:
 			return "LockRows";
 		case T_Limit:
@@ -436,10 +441,54 @@ path_single_input(Path *path)
 			return ((WindowAggPath *) path)->subpath;
 		case T_LockRowsPath:
 			return ((LockRowsPath *) path)->subpath;
+		case T_ModifyTablePath:
+			return ((ModifyTablePath *) path)->subpath;
+		case T_SubqueryScanPath:
+			/* the subquery's own path, planned with its own PlannerInfo */
+			return ((SubqueryScanPath *) path)->subpath;
 		case T_BitmapHeapPath:
 			return ((BitmapHeapPath *) path)->bitmapqual;
 		default:
 			return NULL;
+	}
+}
+
+/*
+ * The inputs of a path that has a list of them (or, for SetOp and
+ * RecursiveUnion, a left and a right input).  Returns false for any other
+ * path.  *list and *pair are set; pair inputs follow the list ones.
+ */
+static bool
+path_child_list(Path *path, List **list, Path **pair, int *npair)
+{
+	*list = NIL;
+	*npair = 0;
+	switch (nodeTag(path))
+	{
+		case T_AppendPath:
+			*list = ((AppendPath *) path)->subpaths;
+			return true;
+		case T_MergeAppendPath:
+			*list = ((MergeAppendPath *) path)->subpaths;
+			return true;
+		case T_BitmapAndPath:
+			*list = ((BitmapAndPath *) path)->bitmapquals;
+			return true;
+		case T_BitmapOrPath:
+			*list = ((BitmapOrPath *) path)->bitmapquals;
+			return true;
+		case T_SetOpPath:
+			pair[0] = ((SetOpPath *) path)->leftpath;
+			pair[1] = ((SetOpPath *) path)->rightpath;
+			*npair = 2;
+			return true;
+		case T_RecursiveUnionPath:
+			pair[0] = ((RecursiveUnionPath *) path)->leftpath;
+			pair[1] = ((RecursiveUnionPath *) path)->rightpath;
+			*npair = 2;
+			return true;
+		default:
+			return false;
 	}
 }
 
@@ -454,9 +503,18 @@ pelog_register_path(PathEventLog *log, Path *path)
 				outer = 0,
 				inner = 0;
 	Path	   *child;
+	List	   *children;
+	Path	   *pair[2];
+	int			npair;
+	bool		has_children;
+	int			nchildren = 0;
+	int		   *child_ids = NULL;
 
 	if (path == NULL)
 		return 0;
+
+	/* registration recurses into child paths */
+	check_stack_depth();
 
 	if (log->path_map == NULL)
 	{
@@ -493,6 +551,7 @@ pelog_register_path(PathEventLog *log, Path *path)
 	e->accepted_seq = 0;
 
 	/* children first; nodes[] may be reallocated by the recursion */
+	has_children = path_child_list(path, &children, pair, &npair);
 	if (IsA(path, NestPath) || IsA(path, MergePath) || IsA(path, HashPath))
 	{
 		outer = pelog_register_path(log, ((JoinPath *) path)->outerjoinpath);
@@ -500,6 +559,16 @@ pelog_register_path(PathEventLog *log, Path *path)
 	}
 	else if ((child = path_single_input(path)) != NULL)
 		sub = pelog_register_path(log, child);
+	else if (has_children && list_length(children) + npair > 0)
+	{
+		child_ids = MemoryContextAlloc(log->mcxt,
+									   (list_length(children) + npair) *
+									   sizeof(int));
+		foreach_ptr(Path, cpath, children)
+			child_ids[nchildren++] = pelog_register_path(log, cpath);
+		for (int i = 0; i < npair; i++)
+			child_ids[nchildren++] = pelog_register_path(log, pair[i]);
+	}
 
 	log->nodes[idx].id = id;
 	log->nodes[idx].pathtype = path->pathtype;
@@ -508,6 +577,9 @@ pelog_register_path(PathEventLog *log, Path *path)
 	log->nodes[idx].subpath_id = sub;
 	log->nodes[idx].outer_path_id = outer;
 	log->nodes[idx].inner_path_id = inner;
+	log->nodes[idx].has_children = has_children;
+	log->nodes[idx].nchildren = nchildren;
+	log->nodes[idx].child_ids = child_ids;
 	return id;
 }
 

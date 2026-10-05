@@ -256,6 +256,13 @@ render_json(PathProbeReport *report, StringInfo out, PathProbeOpts *opts,
 			appendStringInfo(out, ",\"outer_path_id\":%d", n->outer_path_id);
 		if (n->inner_path_id > 0)
 			appendStringInfo(out, ",\"inner_path_id\":%d", n->inner_path_id);
+		if (n->has_children)
+		{
+			appendStringInfoString(out, ",\"child_path_ids\":[");
+			for (int c = 0; c < n->nchildren; c++)
+				appendStringInfo(out, c ? ",%d" : "%d", n->child_ids[c]);
+			appendStringInfoChar(out, ']');
+		}
 		appendStringInfoChar(out, '}');
 	}
 	appendStringInfoString(out, log->nnodes > 0 ? "\n  ],\n" : "],\n");

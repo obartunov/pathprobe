@@ -163,6 +163,9 @@ typedef struct PathNode
 	int			subpath_id;		/* single-input wrapper, BitmapHeapScan */
 	int			outer_path_id;	/* join paths */
 	int			inner_path_id;
+	bool		has_children;	/* a node with a list of inputs */
+	int			nchildren;
+	int		   *child_ids;		/* in the path's own input order */
 } PathNode;
 
 /* ----------
