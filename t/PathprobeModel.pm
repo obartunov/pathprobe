@@ -812,6 +812,37 @@ sub check_correctness {
         push @fails, "emitted ".scalar(@ev)." events exceeds cap $cap" if defined $cap && @ev > $cap;
     }
     push @fails, "missing coverage object" unless ref($j->{coverage}) eq 'HASH';
+    # path identity: ids resolve to paths[], DISPLACED links to its displacer
+    {
+        my %node = map { ($_->{path_id} => $_) } grep { ref $_ eq 'HASH' } @{ $j->{paths} // [] };
+        my %by_seq = map { ($_->{seq} => $_) } grep { ref $_ eq 'HASH' } @ev;
+        push @fails, "missing paths array" unless ref($j->{paths}) eq 'ARRAY';
+        for my $e (grep { ref $_ eq 'HASH' } @ev) {
+            my $k = $e->{kind} // '';
+            if ($k eq 'skipped' || $k eq 'excluded') {
+                push @fails, "$k event with a path_id" if defined $e->{path_id};
+                next;
+            }
+            if (!defined $e->{path_id}) { push @fails, "$k event without path_id"; next; }
+            push @fails, "path_id $e->{path_id} not in paths[]" unless $node{$e->{path_id}};
+            next unless $k eq 'displaced';
+            my $d = $e->{displacer_seq};
+            next unless defined $d;
+            my $a = $by_seq{$d};
+            push @fails, "displacer_seq $d is not an accepted event"
+                unless $a && ($a->{kind} // '') eq 'accepted';
+            push @fails, "displacer_path_id does not match the event at displacer_seq"
+                if $a && (($a->{path_id} // -1) != ($e->{displacer_path_id} // -2));
+            push @fails, "other_pathtype does not match the displacer"
+                if $a && (($a->{pathtype} // '') ne ($e->{other_pathtype} // ''));
+        }
+        for my $n (values %node) {
+            for my $f (qw(subpath_id outer_path_id inner_path_id)) {
+                push @fails, "$f $n->{$f} not in paths[]"
+                    if defined $n->{$f} && !$node{$n->{$f}};
+            }
+        }
+    }
     for my $cand (@{ $j->{candidates} // [] }) {
         next unless ref $cand eq 'HASH';
         my $ec = $cand->{event_counts} // {};
