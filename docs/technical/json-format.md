@@ -16,6 +16,7 @@ version or the extension SQL version.
   "hypo_indexes": [],
   "candidates": [],
   "events": [],
+  "paths": [],
   "limits": {},
   "coverage": {},
   "summary": []
@@ -36,8 +37,20 @@ should tolerate empty arrays/objects.
   "kind": "accepted",
   "origin": "proposed",
   "label": "candidate_name",
+  "path_id": 4,
   "cost_total": 1.0,
   "disabled_nodes": 1
+}
+```
+
+A DISPLACED event also names the path that displaced it:
+
+```json
+{
+  "seq": 19, "src": "p1", "rel": "{1,2}", "pathtype": "MergeJoin",
+  "kind": "displaced", "path_id": 9,
+  "displacer_path_id": 11, "displacer_seq": 18, "other_pathtype": "NestLoop",
+  "gap_cost": 773.13
 }
 ```
 
@@ -48,7 +61,66 @@ label should be present for proposed/hypothetical/advisor paths
 origin is real or proposed
 cost fields are omitted when not meaningful or when costs are suppressed
 strings are JSON-escaped, never interpolated raw
+path_id is null for skipped and excluded events (no Path exists yet)
+displacer_seq is null if the displacer's ACCEPTED event was not recorded
+  (event cap)
 ```
+
+## paths[]
+
+One entry per `path_id` used in this result, including paths that have no
+event of their own but are a child of one that has (for example a Memoize
+or Material path built inside a nested loop).
+
+```json
+{"path_id": 12, "pathtype": "NestLoop", "rel": "{1,2}",
+ "outer_path_id": 2, "inner_path_id": 9}
+{"path_id": 9, "pathtype": "BitmapHeapScan", "rel": "{2}", "subpath_id": 8}
+```
+
+```text
+outer_path_id, inner_path_id  NestLoop, MergeJoin, HashJoin
+subpath_id                    the single input of Projection, ProjectSet, Sort,
+                              IncrementalSort, Material, Memoize, Gather,
+                              GatherMerge, Limit, Unique, Agg, Group,
+                              WindowAgg, LockRows; for BitmapHeapScan the
+                              bitmap qual (an IndexScan path, or a
+                              BitmapAnd / BitmapOr)
+```
+
+Paths with several inputs (Append, MergeAppend, BitmapAnd, BitmapOr, SetOp,
+...) and other wrappers carry no child edges.
+
+## Path identity and graph edges
+
+```text
+path_id is local to one probe result: 1, 2, 3, ... in order of first sight
+path_id is not stable across runs or between queries
+path_id is not a pointer and does not encode one
+seq is event order; path_id is path identity: one path can have several
+  events (accepted, then survived in a snapshot, then displaced; or
+  accepted again into an upper rel unchanged), all with the same path_id
+```
+
+Identity follows the Path object.  A wrapper built on top of a path (a
+Sort, a Projection, a Gather) is a different path with its own id and a
+`subpath_id` edge to the original.  An IndexPath can be both a scan path
+in the pathlist and the bitmap qual of a BitmapHeapScan; it is the same
+object, with one id.
+
+Paths are not identified by cost or by `pathtype` + `rel`: several paths
+share those.  While planning, pathprobe maps each Path object to its id.
+`add_path()` frees the paths it rejects or displaces (except IndexPaths),
+and the hooks drop those from the map, so a later path that reuses the
+memory gets a new id.
+
+Limits: with GEQO the planner frees join paths by resetting memory without
+`add_path()`, so ids of join paths may be conflated there (a node-type and
+parent-rel check guards against most cases); without the core hooks patch
+pathprobe does not see any free, so the same holds for every path.  REJECTED
+events do not identify the dominating path: the core hook passes the rel's
+cheapest total path as a proxy.  `paths[]` is in the JSON only; the text
+output and the `EXPLAIN` integration do not show ids.
 
 ## candidates[]
 

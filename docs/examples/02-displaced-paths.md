@@ -18,16 +18,16 @@ The hash join.  Paths that were accepted and later removed leave no trace.
 Acceptances and displacements at the join rel, in planner order:
 
 ```text
- seq |   path    |   event   | gap_cost
------+-----------+-----------+----------
-  15 | MergeJoin | accepted  |
-  18 | NestLoop  | accepted  | 773.13
-  19 | MergeJoin | displaced | 773.13
-  25 | MergeJoin | accepted  | 199.18
-  26 | NestLoop  | displaced | 199.18
-  28 | HashJoin  | accepted  | 526.30
-  29 | MergeJoin | displaced | 526.30
-  30 | HashJoin  | survived  |
+ seq |   path    |   event   | path_id | displacer | displacer_seq | displacer_type | gap_cost
+-----+-----------+-----------+---------+-----------+---------------+----------------+----------
+  15 | MergeJoin | accepted  |       9 |           |               |                |
+  18 | NestLoop  | accepted  |      11 |           |               |                | 773.13
+  19 | MergeJoin | displaced |       9 |        11 |            18 | NestLoop       | 773.13
+  25 | MergeJoin | accepted  |      17 |           |               |                | 199.18
+  26 | NestLoop  | displaced |      11 |        17 |            25 | MergeJoin      | 199.18
+  28 | HashJoin  | accepted  |      19 |           |               |                | 526.30
+  29 | MergeJoin | displaced |      17 |        19 |            28 | HashJoin       | 526.30
+  30 | HashJoin  | survived  |      19 |           |               |                |
 ```
 
 The text form says the same:
@@ -49,8 +49,12 @@ Two proposed candidates on one relation, the cheaper one injected second:
 ## Explanation
 
 A DISPLACED event is emitted from the list of paths `add_path()` removes
-when it accepts a new one, right after that ACCEPTED event.  `gap_cost` on
-both is `old.total_cost - new.total_cost`: how much better the displacer is.
+when it accepts a new one, right after that ACCEPTED event.  It names the
+displaced path by `path_id` (the same id as its own earlier ACCEPTED event)
+and the displacer by `displacer_path_id`, `displacer_seq` and
+`other_pathtype`.  `gap_cost` on both is `old.total_cost - new.total_cost`:
+how much better the displacer is.  The two merge join paths are different
+paths (ids 9 and 17), which the event order alone does not show.
 
 `early` was in the pathlist right after its own `add_path()` (one
 `survived` event), and was displaced afterwards.  A fate derived from "no
@@ -59,9 +63,7 @@ fate is `displaced` because the displacement is observed.
 
 ## Caveat
 
-- The displacer's type is recorded internally (`other_pathtype`) but is not
-  in the JSON event; it is the ACCEPTED event immediately before the
-  DISPLACED ones, with the same `gap_cost`.  The script checks that pairing.
+- `path_id` is local to one result and not stable across runs.
 - Displacement needs `pathprobe.log_accepted = on`
   (`coverage.add_path_displaced`).
 - Paths dropped when `apply_scanjoin_target_to_paths()` rebuilds a

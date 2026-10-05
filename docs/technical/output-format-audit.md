@@ -40,9 +40,10 @@ but not displacement counts or the build decision.
 ### 2. Displaced paths
 
 - Easy: `candidates[].fate = displaced` with `event_counts`.
-- Implicit: who displaced whom.  The displacer is the ACCEPTED event right
-  before the DISPLACED ones, with the same `gap_cost`; the displacer's type is
-  stored (`other_pathtype`) but not emitted.
+- Who displaced whom was implicit (the ACCEPTED event right before, same
+  `gap_cost`).  Now explicit: DISPLACED events carry `displacer_path_id`,
+  `displacer_seq` and `other_pathtype`, and every path has a `path_id`
+  (see `json-format.md`, "Path identity and graph edges").
 - Confusing: `event_counts.survived = 1` next to `fate = displaced` (the
   frontier snapshot after injection is counted).  `survived_upper` vs
   `survived` needs the docs.
@@ -130,7 +131,7 @@ index_build.generated / not_generated
 coverage.*                           complete and correct, but nothing ties a
                                      particular unknown fate to the gap that
                                      caused it except fate_reason for hypos
-displaced events                     present; displacer only by position
+displaced events                     present; displacer named by path_id and seq
 advisor output                       no structured link to its candidates; no
                                      list of skipped clauses
 in_plan                              clear; the only final-plan field
@@ -149,8 +150,8 @@ unknown / not_examined / not_generated
 3   one-line text summary per candidate/hypo   text-output only         partly exists; add disp=
                                                                         to the hypo line (follow-up)
 4   rename survived_at_point / survived        requires semantic change do not do; documented
-5   displacer type in JSON events              JSON additive field      follow-up (value exists:
-                                                                        other_pathtype)
+5   displacer type in JSON events              JSON additive field      done: other_pathtype,
+                                                                        displacer_path_id/_seq
 6   advisor -> candidate link                  JSON additive field      follow-up (e.g. hypo source
                                                                         "advisor" / "user")
 7   jq recipes                                 docs-only                done, below
@@ -179,8 +180,10 @@ In order of value.  None is implemented here.
 1. Keep `kept: startup` / `kept: order?` out of `label` (a separate event
    field or text-only rendering), so `origin` stays `real` for real paths.
    This is a correctness fix for tools that filter by origin or label.
-2. Emit the displacer's path type on DISPLACED events (and the competitor on
-   REJECTED events): `other_pathtype` is already recorded.  Additive.
+2. Done for DISPLACED events (`displacer_path_id`, `displacer_seq`,
+   `other_pathtype`, with `path_id` on every path event and child edges in
+   `paths[]`).  REJECTED events still name no dominator: the core hook
+   passes the rel's cheapest total path as a proxy, which is not one.
 3. Add the displaced count to the text line of a hypothetical index.
 4. Omit the empty legacy `target` and `candidate` blocks when the call has no
    explicit candidate, as already done for the top-level `fate`.
@@ -210,20 +213,26 @@ Coverage gaps:
 jq -r '.coverage | to_entries | map(select(.value == false) | .key) | join(",")'
 ```
 
-Who displaced whom (the nearest preceding ACCEPTED event):
+Who displaced whom:
 
 ```sh
-jq -r '.events as $e | $e | to_entries[] | select(.value.kind == "displaced")
-  | .key as $i | ([$e[0:$i][] | select(.kind == "accepted")] | last) as $a
-  | [.value.seq, .value.pathtype, (.value.label // "-"),
-     "by", $a.seq, $a.pathtype, ($a.label // "-")] | @tsv'
+jq -r '.events[] | select(.kind == "displaced")
+  | [.seq, .pathtype, .path_id, (.label // "-"),
+     "by", .displacer_seq, .other_pathtype, .displacer_path_id] | @tsv'
 ```
 
-On example 7 the last one prints:
+On example 7:
 
 ```text
-4   SeqScan         -           by  3   IndexScan       hypo:adv_1
-6   IndexScan       hypo:adv_1  by  5   BitmapHeapScan  hypo:adv_1
-11  BitmapHeapScan  hypo:adv_1  by  10  IndexScan       hypo:adv_3
-13  IndexScan       hypo:adv_3  by  12  BitmapHeapScan  hypo:adv_3
+4   SeqScan         1  -           by  3   IndexScan       2
+6   IndexScan       2  hypo:adv_1  by  5   BitmapHeapScan  3
+11  BitmapHeapScan  3  hypo:adv_1  by  10  IndexScan       6
+13  IndexScan       6  hypo:adv_3  by  12  BitmapHeapScan  7
+```
+
+Join paths and their children:
+
+```sh
+jq -r '.paths[] | select(.outer_path_id) |
+  [.path_id, .pathtype, .rel, .outer_path_id, .inner_path_id] | @tsv'
 ```

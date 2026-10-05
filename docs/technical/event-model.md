@@ -28,6 +28,10 @@ pathtype        PostgreSQL path type name
 kind            excluded/skipped/rejected/accepted/displaced/survived
 origin          real/proposed
 label           candidate or hypothetical path identity
+path_id         identity of the path within this result (null without a Path)
+displacer_path_id, displacer_seq, other_pathtype
+                DISPLACED only: the path that displaced this one, its
+                ACCEPTED event and its type
 cost_total      path total cost where meaningful
 gap_cost        difference from local competitor where meaningful
 skip_reason     precheck reason where available

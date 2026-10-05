@@ -95,6 +95,13 @@ PathEventLog      the per-run event buffer + relids pool + truncation flag
 PathProbeReport   log + summary + advisor fields returned to the renderers
 ```
 
+Path identity (`pelog_path_id`, pathprobe.c): a hash map from Path pointer
+to a per-log id, plus a node table (`PathNode`: type, relids, child edges)
+that the JSON renderer emits as `paths[]`.  Children of join and
+single-input wrapper paths are registered with their parent.  The probe1
+hooks call `pelog_path_forget` for every path `add_path()` is about to free,
+also when acceptance is not logged, so a recycled address gets a new id.
+
 `pelog_append` (pathprobe.c) is the single insertion point: it assigns a
 strictly monotone `seq`, enforces `max_events` (setting `events_truncated`
 instead of growing silently), and interns relids.  `pelog_build_summary`

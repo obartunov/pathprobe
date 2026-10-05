@@ -52,6 +52,17 @@ the JSON `coverage` object says which ones are covered.  `accepted` and
 it, "no accepted event" says nothing.  See
 [json-format](../technical/json-format.md#coverage).
 
+## Path identity
+
+In JSON every event that concerns a Path has a `path_id`; the same path keeps
+it across its events (accepted, survived in a snapshot, displaced).  A
+DISPLACED event names its displacer (`displacer_path_id`, `displacer_seq`,
+`other_pathtype`).  The top-level `paths[]` array gives each id its type and
+relation, and the child edges of join paths (`outer_path_id`,
+`inner_path_id`) and single-input wrappers (`subpath_id`).  `seq` is event
+order, not identity.  See
+[json-format](../technical/json-format.md#path-identity-and-graph-edges).
+
 ## Sources
 
 `src` identifies the instrumentation source:
