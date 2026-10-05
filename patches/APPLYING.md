@@ -20,4 +20,7 @@ patch adds the add_path/rel-level observation hooks used by probe1 and
 the proposed-path frontier check, and the build_index_paths() decision hook
 used for hypothetical-index fate.  The latter is detected separately through
 HAVE_PATHPROBE_INDEX_PATH_HOOK, so a server built with an older copy of the
-patch still works, without index-build coverage.
+patch still works, without index-build coverage.  Likewise
+HAVE_PATHPROBE_REJECTED_DOMINATOR says that the rejected hook gets the old
+path that dominated the new one, not the rel's cheapest total path; without
+it REJECTED events carry no dominator.
