@@ -47,12 +47,16 @@ extern double pathprobe_min_gap;
 /*
  * probe1_rejected_hook
  *
- * Called by add_path() when new_path is dominated.
- * dominated_by is parent_rel->cheapest_total_path at call time.  NOTE:
- * set_cheapest() has not yet run while add_path() is populating the rel
- * (allpaths.c:607, joinrels.c:1538), so in practice dominated_by is NULL
- * and gap stays 0; the min_gap filter below does not apply to REJECTED
- * until the core patch passes the actual dominating old_path.
+ * Called by add_path() when new_path is dominated.  With
+ * HAVE_PATHPROBE_REJECTED_DOMINATOR, dominated_by is the old path that
+ * add_path() found to dominate new_path; it is recorded as the event's
+ * link_*.  Older copies of the core patch pass rel->cheapest_total_path
+ * instead, which is not recorded as a dominator.
+ *
+ * gap_cost, other_pathtype and the min_gap filter keep using
+ * rel->cheapest_total_path, as before.  set_cheapest() has not yet run
+ * while add_path() is populating the rel (allpaths.c:607,
+ * joinrels.c:1538), so in practice that is NULL and gap stays 0.
  *
  * Note: new_path may be pfree'd immediately after this call.
  * We snapshot all needed fields before returning.
@@ -62,6 +66,12 @@ probe1_rejected_hook(RelOptInfo *rel, Path *new_path, Path *dominated_by)
 {
 	PathEvent	ev;
 	double		gap;
+	Path	   *proxy = rel->cheapest_total_path;
+#ifdef HAVE_PATHPROBE_REJECTED_DOMINATOR
+	Path	   *dominator = dominated_by;
+#else
+	Path	   *dominator = NULL;
+#endif
 
 	if (pathprobe_active_log == NULL)
 		return;
@@ -71,8 +81,7 @@ probe1_rejected_hook(RelOptInfo *rel, Path *new_path, Path *dominated_by)
 	 * Positive = new_path lost (normal case). Negative = new_path lost on
 	 * startup cost, not total.
 	 */
-	gap = dominated_by ? (new_path->total_cost - dominated_by->total_cost)
-		: 0.0;
+	gap = proxy ? (new_path->total_cost - proxy->total_cost) : 0.0;
 
 	/* Apply min_gap filter */
 	if (pathprobe_min_gap > 0.0 && fabs(gap) < pathprobe_min_gap)
@@ -102,7 +111,7 @@ probe1_rejected_hook(RelOptInfo *rel, Path *new_path, Path *dominated_by)
 	/* Competition context */
 	ev.is_parameterized = (new_path->param_info != NULL);
 	ev.gap_cost = gap;
-	ev.other_pathtype = dominated_by ? dominated_by->pathtype : T_Invalid;
+	ev.other_pathtype = proxy ? proxy->pathtype : T_Invalid;
 
 	{
 		const char *pname = pathprobe_path_label(new_path);
@@ -111,6 +120,13 @@ probe1_rejected_hook(RelOptInfo *rel, Path *new_path, Path *dominated_by)
 			ev.label = MemoryContextStrdup(pathprobe_active_log->mcxt, pname);
 	}
 	ev.path_id = pelog_path_id(pathprobe_active_log, new_path);
+	if (dominator)
+	{
+		ev.link_path_id = pelog_path_id(pathprobe_active_log, dominator);
+		ev.link_seq = pelog_path_accepted_seq(pathprobe_active_log,
+											  dominator, rel);
+		ev.link_pathtype = dominator->pathtype;
+	}
 	pelog_append(pathprobe_active_log, &ev);
 
 	/* add_path() frees a rejected path unless it is an IndexPath */
@@ -177,6 +193,7 @@ probe1_accepted_hook(RelOptInfo *rel, Path *new_path, List *dominated_list)
 	}
 	ev.path_id = pelog_path_id(pathprobe_active_log, new_path);
 	pelog_append(pathprobe_active_log, &ev);	/* sets ev.seq, or 0 if full */
+	pelog_path_accepted(pathprobe_active_log, new_path, rel, ev.seq);
 
 	/*
 	 * One DISPLACED event per path that new_path removed from the pathlist.
@@ -205,6 +222,7 @@ probe1_accepted_hook(RelOptInfo *rel, Path *new_path, List *dominated_list)
 		dev.path_id = pelog_path_id(pathprobe_active_log, old_path);
 		dev.link_path_id = ev.path_id;
 		dev.link_seq = ev.seq;
+		dev.link_pathtype = new_path->pathtype;
 		pelog_append(pathprobe_active_log, &dev);
 
 		/* freed by add_path() after this hook, unless an IndexPath */

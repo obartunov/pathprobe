@@ -384,6 +384,10 @@ pelog_append(PathEventLog *log, PathEvent *ev)
  * pelog_path_forget() for those, so a later Path at a recycled address gets
  * a new id.  As a second guard, an entry is reused only if node type and
  * parent rel match.
+ *
+ * accepted_rel/accepted_seq remember the last recorded ACCEPTED event of
+ * the path, so that a REJECTED event can point at the ACCEPTED event of its
+ * dominator.  The rel pointer is only compared, never dereferenced.
  * -------------------------------------------------------------------------
  */
 typedef struct PathMapEntry
@@ -392,6 +396,8 @@ typedef struct PathMapEntry
 	int			id;
 	NodeTag		type;
 	RelOptInfo *parent;
+	RelOptInfo *accepted_rel;
+	int			accepted_seq;
 } PathMapEntry;
 
 static int	pelog_register_path(PathEventLog *log, Path *path);
@@ -483,6 +489,8 @@ pelog_register_path(PathEventLog *log, Path *path)
 	e->id = id;
 	e->type = nodeTag(path);
 	e->parent = path->parent;
+	e->accepted_rel = NULL;
+	e->accepted_seq = 0;
 
 	/* children first; nodes[] may be reallocated by the recursion */
 	if (IsA(path, NestPath) || IsA(path, MergePath) || IsA(path, HashPath))
@@ -526,6 +534,46 @@ pelog_path_forget(PathEventLog *log, Path *path)
 	if (log == NULL || log->path_map == NULL || path == NULL)
 		return;
 	(void) hash_search(log->path_map, &path, HASH_REMOVE, NULL);
+}
+
+/* the map entry of a registered, still current path, or NULL */
+static PathMapEntry *
+pelog_path_entry(PathEventLog *log, Path *path)
+{
+	PathMapEntry *e;
+
+	if (log == NULL || log->path_map == NULL || path == NULL)
+		return NULL;
+	e = (PathMapEntry *) hash_search(log->path_map, &path, HASH_FIND, NULL);
+	if (e == NULL || e->type != nodeTag(path) || e->parent != path->parent)
+		return NULL;
+	return e;
+}
+
+/* record that path's ACCEPTED event into rel has sequence number seq */
+void
+pelog_path_accepted(PathEventLog *log, Path *path, RelOptInfo *rel, int seq)
+{
+	PathMapEntry *e = pelog_path_entry(log, path);
+
+	if (e == NULL || seq <= 0)
+		return;
+	e->accepted_rel = rel;
+	e->accepted_seq = seq;
+}
+
+/*
+ * seq of the last recorded ACCEPTED event of path, if that event was into
+ * rel; else 0.
+ */
+int
+pelog_path_accepted_seq(PathEventLog *log, Path *path, RelOptInfo *rel)
+{
+	PathMapEntry *e = pelog_path_entry(log, path);
+
+	if (e == NULL || e->accepted_rel != rel)
+		return 0;
+	return e->accepted_seq;
 }
 
 /* -------------------------------------------------------------------------

@@ -138,13 +138,16 @@ typedef struct PathEvent
 
 	/*
 	 * Path identity within this log (see pelog_path_id); 0 when the event
-	 * has no Path (SKIPPED, EXCLUDED).  For DISPLACED, link_path_id is the
-	 * path that displaced this one and link_seq the seq of its ACCEPTED
-	 * event (0 if that event was not recorded).
+	 * has no Path (SKIPPED, EXCLUDED).  link_* names the other path of the
+	 * add_path() decision: for DISPLACED the path that displaced this one,
+	 * for REJECTED the old path that dominated it.  link_seq is the seq of
+	 * that path's ACCEPTED event into the same rel (0 if not recorded).
+	 * Unlike other_pathtype, link_* never comes from a proxy.
 	 */
 	int			path_id;
 	int			link_path_id;
 	int			link_seq;
+	NodeTag		link_pathtype;
 } PathEvent;
 
 /*
@@ -307,6 +310,10 @@ extern void pelog_append(PathEventLog *log, PathEvent *ev);
 extern Relids pelog_intern_relids(PathEventLog *log, Relids r);
 extern int	pelog_path_id(PathEventLog *log, Path *path);
 extern void pelog_path_forget(PathEventLog *log, Path *path);
+extern void pelog_path_accepted(PathEventLog *log, Path *path,
+								RelOptInfo *rel, int seq);
+extern int	pelog_path_accepted_seq(PathEventLog *log, Path *path,
+									RelOptInfo *rel);
 extern void pelog_build_rtmap(PathEventLog *log, List *rtable);
 
 /*

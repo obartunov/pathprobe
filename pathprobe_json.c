@@ -182,6 +182,24 @@ render_json(PathProbeReport *report, StringInfo out, PathProbeOpts *opts,
 			appendStringInfoString(out, ",\"other_pathtype\":");
 			json_str(out, pathtype_name(ev->other_pathtype));
 		}
+		else if (ev->kind == PEK_REJECTED)
+		{
+			/* the old path add_path() found to dominate this one */
+			if (ev->link_path_id > 0)
+			{
+				appendStringInfo(out, ",\"dominator_path_id\":%d",
+								 ev->link_path_id);
+				appendStringInfoString(out, ",\"dominator_pathtype\":");
+				json_str(out, pathtype_name(ev->link_pathtype));
+			}
+			else
+				appendStringInfoString(out, ",\"dominator_path_id\":null"
+									   ",\"dominator_pathtype\":null");
+			if (ev->link_seq > 0)
+				appendStringInfo(out, ",\"dominator_seq\":%d", ev->link_seq);
+			else
+				appendStringInfoString(out, ",\"dominator_seq\":null");
+		}
 		if (ev->label)
 		{
 			appendStringInfoString(out, ",\"label\":");
