@@ -132,6 +132,7 @@ coverage.*                           complete and correct, but nothing ties a
                                      particular unknown fate to the gap that
                                      caused it except fate_reason for hypos
 displaced events                     present; displacer named by path_id and seq
+rejected events                      dominator named by path_id and seq
 advisor output                       no structured link to its candidates; no
                                      list of skipped clauses
 in_plan                              clear; the only final-plan field
@@ -151,7 +152,8 @@ unknown / not_examined / not_generated
                                                                         to the hypo line (follow-up)
 4   rename survived_at_point / survived        requires semantic change do not do; documented
 5   displacer type in JSON events              JSON additive field      done: other_pathtype,
-                                                                        displacer_path_id/_seq
+                                                                        displacer_path_id/_seq;
+                                                                        dominator_* for REJECTED
 6   advisor -> candidate link                  JSON additive field      follow-up (e.g. hypo source
                                                                         "advisor" / "user")
 7   jq recipes                                 docs-only                done, below
@@ -180,10 +182,12 @@ In order of value.  None is implemented here.
 1. Keep `kept: startup` / `kept: order?` out of `label` (a separate event
    field or text-only rendering), so `origin` stays `real` for real paths.
    This is a correctness fix for tools that filter by origin or label.
-2. Done for DISPLACED events (`displacer_path_id`, `displacer_seq`,
-   `other_pathtype`, with `path_id` on every path event and child edges in
-   `paths[]`).  REJECTED events still name no dominator: the core hook
-   passes the rel's cheapest total path as a proxy, which is not one.
+2. Done: DISPLACED events name the displacer (`displacer_path_id`,
+   `displacer_seq`, `other_pathtype`), REJECTED events the dominator
+   (`dominator_path_id`, `dominator_seq`, `dominator_pathtype`; the core
+   hook now passes the actual dominating path), every path event has a
+   `path_id`, and `paths[]` has the child edges, including `child_path_ids`
+   of Append, MergeAppend, BitmapAnd, BitmapOr, SetOp and RecursiveUnion.
 3. Add the displaced count to the text line of a hypothetical index.
 4. Omit the empty legacy `target` and `candidate` blocks when the call has no
    explicit candidate, as already done for the top-level `fate`.
@@ -235,4 +239,20 @@ Join paths and their children:
 ```sh
 jq -r '.paths[] | select(.outer_path_id) |
   [.path_id, .pathtype, .rel, .outer_path_id, .inner_path_id] | @tsv'
+```
+
+Who rejected whom:
+
+```sh
+jq -r '.events[] | select(.kind == "rejected")
+  | [.seq, .pathtype, .path_id, "by", .dominator_seq, .dominator_pathtype,
+     .dominator_path_id] | @tsv'
+```
+
+Paths with a list of inputs:
+
+```sh
+jq -r '.paths[] | select(.child_path_ids) |
+  [.path_id, .pathtype, .rel, (.child_path_ids | map(tostring) | join(","))]
+  | @tsv'
 ```

@@ -97,10 +97,13 @@ PathProbeReport   log + summary + advisor fields returned to the renderers
 
 Path identity (`pelog_path_id`, pathprobe.c): a hash map from Path pointer
 to a per-log id, plus a node table (`PathNode`: type, relids, child edges)
-that the JSON renderer emits as `paths[]`.  Children of join and
-single-input wrapper paths are registered with their parent.  The probe1
+that the JSON renderer emits as `paths[]`.  Children of join, single-input
+wrapper and multi-input paths are registered with their parent.  The probe1
 hooks call `pelog_path_forget` for every path `add_path()` is about to free,
 also when acceptance is not logged, so a recycled address gets a new id.
+The map entry also keeps the seq of the path's last ACCEPTED event and the
+rel it went into (`pelog_path_accepted`), which the rejected hook uses for
+`dominator_seq`.
 
 `pelog_append` (pathprobe.c) is the single insertion point: it assigns a
 strictly monotone `seq`, enforces `max_events` (setting `events_truncated`

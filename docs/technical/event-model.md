@@ -32,6 +32,10 @@ path_id         identity of the path within this result (null without a Path)
 displacer_path_id, displacer_seq, other_pathtype
                 DISPLACED only: the path that displaced this one, its
                 ACCEPTED event and its type
+dominator_path_id, dominator_seq, dominator_pathtype
+                REJECTED only: the old path add_path() stopped at as
+                dominating this one, its ACCEPTED event into the same rel
+                and its type
 cost_total      path total cost where meaningful
 gap_cost        difference from local competitor where meaningful
 skip_reason     precheck reason where available

@@ -54,6 +54,17 @@ A DISPLACED event also names the path that displaced it:
 }
 ```
 
+A REJECTED event names the old path that made it lose:
+
+```json
+{
+  "seq": 20, "src": "p1", "rel": "{1,2}", "pathtype": "NestLoop",
+  "kind": "rejected", "path_id": 14,
+  "dominator_path_id": 13, "dominator_pathtype": "MergeJoin",
+  "dominator_seq": 17
+}
+```
+
 Rules:
 
 ```text
@@ -64,7 +75,25 @@ strings are JSON-escaped, never interpolated raw
 path_id is null for skipped and excluded events (no Path exists yet)
 displacer_seq is null if the displacer's ACCEPTED event was not recorded
   (event cap)
+dominator_seq is null if the dominator's ACCEPTED event into this rel was
+  not recorded (pathprobe.log_accepted off, event cap, or the path was put
+  into the pathlist without add_path())
+dominator_path_id and dominator_pathtype are null only with a server built
+  from an older copy of the core patch (see below)
 ```
+
+`dominator_path_id` is exact.  `add_path()` compares the new path with the
+paths in the pathlist in order (by disabled nodes, then total cost) and
+stops at the first old path that dominates it, on fuzzy cost, pathkeys,
+parameterization, rows and parallel safety; that path is the dominator.
+Other paths later in the list might also dominate the new one; they are not
+compared and not reported.  The dominator stays in the pathlist, so
+`dominator_seq` is its ACCEPTED event into the same rel.
+
+`gap_cost` of a REJECTED event is unchanged: it is still computed against
+the rel's cheapest total path, which is usually not set while the rel is
+being populated, so it is usually absent.  Do not read it as the distance
+to the dominator.
 
 ## paths[]
 
@@ -76,6 +105,8 @@ or Material path built inside a nested loop).
 {"path_id": 12, "pathtype": "NestLoop", "rel": "{1,2}",
  "outer_path_id": 2, "inner_path_id": 9}
 {"path_id": 9, "pathtype": "BitmapHeapScan", "rel": "{2}", "subpath_id": 8}
+{"path_id": 8, "pathtype": "BitmapOr", "rel": "{2}", "child_path_ids": [6, 7]}
+{"path_id": 17, "pathtype": "Append", "rel": "{1}", "child_path_ids": [1, 3]}
 ```
 
 ```text
@@ -83,13 +114,26 @@ outer_path_id, inner_path_id  NestLoop, MergeJoin, HashJoin
 subpath_id                    the single input of Projection, ProjectSet, Sort,
                               IncrementalSort, Material, Memoize, Gather,
                               GatherMerge, Limit, Unique, Agg, Group,
-                              WindowAgg, LockRows; for BitmapHeapScan the
-                              bitmap qual (an IndexScan path, or a
-                              BitmapAnd / BitmapOr)
+                              WindowAgg, LockRows, ModifyTable; for
+                              SubqueryScan the subquery's own path; for
+                              BitmapHeapScan the bitmap qual (an IndexScan
+                              path, or a BitmapAnd / BitmapOr)
+child_path_ids                Append, MergeAppend (subpaths), BitmapAnd,
+                              BitmapOr (bitmap quals): all inputs, in the
+                              path's own order; SetOp, RecursiveUnion: [left,
+                              right].  Always present on these types; [] for
+                              an Append with no inputs (a dummy rel)
 ```
 
-Paths with several inputs (Append, MergeAppend, BitmapAnd, BitmapOr, SetOp,
-...) and other wrappers carry no child edges.
+Each path carries at most one kind of edge.  Other paths with inputs
+(GroupingSets, ForeignScan's outer path, CustomScan's custom paths,
+MinMaxAgg) carry no child edges.
+
+A path appears in `paths[]` only if an event or a parent path refers to it.
+Upper-rel paths (set operations, aggregation) have only ACCEPTED events, so
+without `pathprobe.log_accepted` they and their children may be missing.
+Paths of a subquery are planned with their own range table, so their `rel`
+uses the subquery's numbering, not the outer query's.
 
 ## Path identity and graph edges
 
@@ -117,10 +161,17 @@ memory gets a new id.
 Limits: with GEQO the planner frees join paths by resetting memory without
 `add_path()`, so ids of join paths may be conflated there (a node-type and
 parent-rel check guards against most cases); without the core hooks patch
-pathprobe does not see any free, so the same holds for every path.  REJECTED
-events do not identify the dominating path: the core hook passes the rel's
-cheapest total path as a proxy.  `paths[]` is in the JSON only; the text
-output and the `EXPLAIN` integration do not show ids.
+pathprobe does not see any free, so the same holds for every path.  When
+`add_path()` removes old paths and then finds one that dominates the new
+path, it frees the removed paths without an event (no DISPLACED, and their
+ids are not dropped from the map); this needs a non-transitive fuzzy cost
+comparison and has not been measured.  `paths[]` is in the JSON only; the
+text output and the `EXPLAIN` integration do not show ids.
+
+The exact dominator needs a server built with the current core patch; it
+defines `HAVE_PATHPROBE_REJECTED_DOMINATOR`.  An older copy of the patch
+passes the rel's cheapest total path to the rejected hook; pathprobe does
+not report that as a dominator, and the dominator fields are null.
 
 ## candidates[]
 

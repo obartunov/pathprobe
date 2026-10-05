@@ -57,10 +57,14 @@ it, "no accepted event" says nothing.  See
 In JSON every event that concerns a Path has a `path_id`; the same path keeps
 it across its events (accepted, survived in a snapshot, displaced).  A
 DISPLACED event names its displacer (`displacer_path_id`, `displacer_seq`,
-`other_pathtype`).  The top-level `paths[]` array gives each id its type and
-relation, and the child edges of join paths (`outer_path_id`,
-`inner_path_id`) and single-input wrappers (`subpath_id`).  `seq` is event
-order, not identity.  See
+`other_pathtype`).  A REJECTED event names the path that dominated it
+(`dominator_path_id`, `dominator_seq`, `dominator_pathtype`): the first path
+in the pathlist that `add_path()` found to be at least as good on cost,
+ordering, parameterization, rows and parallel safety.  The top-level
+`paths[]` array gives each id its type and relation, and the child edges of
+join paths (`outer_path_id`, `inner_path_id`), single-input wrappers
+(`subpath_id`) and paths with a list of inputs, such as Append or BitmapOr
+(`child_path_ids`).  `seq` is event order, not identity.  See
 [json-format](../technical/json-format.md#path-identity-and-graph-edges).
 
 ## Sources

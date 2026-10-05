@@ -51,9 +51,10 @@ hypo/advisor  same functions: hypothetical indexes (hypo_indexes, hypo_sql)
 Event kinds: `excluded`, `skipped`, `rejected`, `accepted`, `displaced`,
 `survived`.  Every event has a sequence number, the relation, the path type
 and, for proposed and hypothetical paths, a label.  In JSON each path has a
-`path_id`, DISPLACED events name their displacer, and `paths[]` gives the
-child edges of join and wrapper paths, so the path graph can be read
-without inferring it from costs or event order.
+`path_id`, DISPLACED events name their displacer, REJECTED events their
+dominator, and `paths[]` gives the child edges of join, wrapper and
+multi-input paths, so the path graph can be read without inferring it from
+costs or event order.
 
 ## Current status
 
@@ -247,9 +248,9 @@ docs/testing/                     model-based tests, generator, test matrix
   carry no label; their outcome is `unknown(outcome_not_observed)`.
 - When `apply_scanjoin_target_to_paths()` rebuilds a pathlist, the paths it
   drops produce no DISPLACED event.
-- REJECTED events do not identify the dominating path (the core hook passes
-  the rel's cheapest total path as a proxy).  `path_id` may conflate join
-  paths under GEQO, and any paths without the core patch.
+- `path_id` may conflate join paths under GEQO, and any paths without the
+  core patch.  Old paths that `add_path()` removes before rejecting the new
+  path are freed without a DISPLACED event.
 - The advisor is a local candidate generator with known defects (OR
   clauses, duplicate expression indexes, hypothetical btree costing); see
   [advisor audit](docs/technical/advisor-audit.md).
