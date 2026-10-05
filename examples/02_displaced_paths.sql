@@ -18,10 +18,15 @@ ANALYZE ex2_customers, ex2_orders;
 \set q 'SELECT * FROM ex2_orders o JOIN ex2_customers c ON c.id = o.customer_id WHERE c.region = 3'
 
 -- 1. Real paths at the join rel: every acceptance and displacement, in
--- planner order.  A DISPLACED event follows the ACCEPTED event of the path
--- that displaced it; gap_cost is old.total_cost - new.total_cost on both.
+-- planner order.  path_id is the path's identity in this result; a DISPLACED
+-- event names the displaced path (path_id), the path that displaced it
+-- (displacer_path_id, other_pathtype) and that path's ACCEPTED event
+-- (displacer_seq).  gap_cost is old.total_cost - new.total_cost.
 SELECT (e->>'seq')::int AS seq, e->>'pathtype' AS path, e->>'kind' AS event,
-       e->>'gap_cost' AS gap_cost
+       (e->>'path_id')::int AS path_id,
+       (e->>'displacer_path_id')::int AS displacer,
+       (e->>'displacer_seq')::int AS displacer_seq,
+       e->>'other_pathtype' AS displacer_type, e->>'gap_cost' AS gap_cost
 FROM jsonb_array_elements(pathprobe_json(:'q')::jsonb->'events') e
 WHERE e->>'rel' = '{1,2}' AND e->>'kind' IN ('accepted', 'displaced', 'survived')
 ORDER BY 1;
@@ -42,7 +47,11 @@ ORDER BY 1;
 
 -- Structural checks; no cost values are asserted.
 WITH ev AS (SELECT (e->>'seq')::int AS seq, e->>'kind' AS kind,
-                   e->>'pathtype' AS path, e->>'gap_cost' AS gap
+                   e->>'pathtype' AS path, e->>'gap_cost' AS gap,
+                   (e->>'path_id')::int AS path_id,
+                   (e->>'displacer_path_id')::int AS displacer_path_id,
+                   (e->>'displacer_seq')::int AS displacer_seq,
+                   e->>'other_pathtype' AS other_pathtype
             FROM jsonb_array_elements(pathprobe_json(:'q')::jsonb->'events') e
             WHERE e->>'rel' = '{1,2}'),
      cand AS (SELECT c FROM jsonb_array_elements(pathprobe_propose_json(
@@ -57,10 +66,13 @@ FROM (VALUES
   ('a merge join path was accepted and later displaced',
    EXISTS (SELECT 1 FROM ev a JOIN ev d ON d.path = a.path AND d.seq > a.seq
            WHERE a.path = 'MergeJoin' AND a.kind = 'accepted' AND d.kind = 'displaced')),
-  ('every displacement follows the acceptance of its displacer, same gap_cost',
-   (SELECT bool_and(d.gap IS NOT NULL AND d.gap = (SELECT a.gap FROM ev a
-                     WHERE a.kind = 'accepted' AND a.seq < d.seq
-                     ORDER BY a.seq DESC LIMIT 1))
+  ('every DISPLACED event names an earlier accepted path and its displacer',
+   (SELECT bool_and(EXISTS (SELECT 1 FROM ev a WHERE a.kind = 'accepted'
+                            AND a.path_id = d.path_id AND a.seq < d.seq)
+                    AND EXISTS (SELECT 1 FROM ev a WHERE a.kind = 'accepted'
+                                AND a.seq = d.displacer_seq
+                                AND a.path_id = d.displacer_path_id
+                                AND a.path = d.other_pathtype))
     FROM ev d WHERE d.kind = 'displaced')),
   ('the surviving join path is a hash join',
    (SELECT bool_and(path = 'HashJoin') FROM ev WHERE kind = 'survived')),

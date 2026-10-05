@@ -43,10 +43,14 @@ SELECT j->'advisor' AS advisor,
 FROM (SELECT pathprobe_propose_json(:'q', '{"advise": true}')::jsonb AS j) s;
 
 -- The events behind "displaced": every path of one candidate is pushed out
--- by a path of a later one.  The displacer is the ACCEPTED event right
--- before each DISPLACED one (same gap_cost).
+-- by a path of a later one.  A DISPLACED event names the displacing path
+-- (displacer_path_id), its ACCEPTED event (displacer_seq) and its type
+-- (other_pathtype).
 SELECT (e->>'seq')::int AS seq, e->>'pathtype' AS path, e->>'kind' AS event,
-       e->>'label' AS label, e->>'gap_cost' AS gap_cost
+       e->>'label' AS label, (e->>'path_id')::int AS path_id,
+       (e->>'displacer_path_id')::int AS displacer_path_id,
+       (e->>'displacer_seq')::int AS displacer_seq,
+       e->>'other_pathtype' AS other_pathtype, e->>'gap_cost' AS gap_cost
 FROM jsonb_array_elements(pathprobe_propose_json(:'q', '{"advise": true}')::jsonb->'events') e
 WHERE e->>'rel' = '{1}' AND e->>'kind' IN ('accepted', 'displaced')
 ORDER BY 1;
