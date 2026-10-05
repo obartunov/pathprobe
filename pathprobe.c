@@ -42,6 +42,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/hsearch.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 
@@ -373,6 +374,161 @@ pelog_append(PathEventLog *log, PathEvent *ev)
 }
 
 /* -------------------------------------------------------------------------
+ * Path identity
+ *
+ * A path gets a small integer id the first time an event or a parent path
+ * refers to it; later references to the same Path object get the same id.
+ * The map from Path pointer to id is used only while planning and never
+ * dereferences a stored pointer.  The planner frees paths that lose in
+ * add_path() (except IndexPaths); the add_path hooks call
+ * pelog_path_forget() for those, so a later Path at a recycled address gets
+ * a new id.  As a second guard, an entry is reused only if node type and
+ * parent rel match.
+ * -------------------------------------------------------------------------
+ */
+typedef struct PathMapEntry
+{
+	const Path *key;
+	int			id;
+	NodeTag		type;
+	RelOptInfo *parent;
+} PathMapEntry;
+
+static int	pelog_register_path(PathEventLog *log, Path *path);
+
+/* the single input of a wrapper path, or NULL */
+static Path *
+path_single_input(Path *path)
+{
+	switch (nodeTag(path))
+	{
+		case T_ProjectionPath:
+			return ((ProjectionPath *) path)->subpath;
+		case T_ProjectSetPath:
+			return ((ProjectSetPath *) path)->subpath;
+		case T_SortPath:
+			return ((SortPath *) path)->subpath;
+		case T_IncrementalSortPath:
+			return ((IncrementalSortPath *) path)->spath.subpath;
+		case T_MaterialPath:
+			return ((MaterialPath *) path)->subpath;
+		case T_MemoizePath:
+			return ((MemoizePath *) path)->subpath;
+		case T_GatherPath:
+			return ((GatherPath *) path)->subpath;
+		case T_GatherMergePath:
+			return ((GatherMergePath *) path)->subpath;
+		case T_LimitPath:
+			return ((LimitPath *) path)->subpath;
+		case T_UniquePath:
+			return ((UniquePath *) path)->subpath;
+		case T_AggPath:
+			return ((AggPath *) path)->subpath;
+		case T_GroupPath:
+			return ((GroupPath *) path)->subpath;
+		case T_WindowAggPath:
+			return ((WindowAggPath *) path)->subpath;
+		case T_LockRowsPath:
+			return ((LockRowsPath *) path)->subpath;
+		case T_BitmapHeapPath:
+			return ((BitmapHeapPath *) path)->bitmapqual;
+		default:
+			return NULL;
+	}
+}
+
+static int
+pelog_register_path(PathEventLog *log, Path *path)
+{
+	PathMapEntry *e;
+	bool		found;
+	int			id;
+	int			idx;
+	int			sub = 0,
+				outer = 0,
+				inner = 0;
+	Path	   *child;
+
+	if (path == NULL)
+		return 0;
+
+	if (log->path_map == NULL)
+	{
+		HASHCTL		ctl;
+
+		ctl.keysize = sizeof(Path *);
+		ctl.entrysize = sizeof(PathMapEntry);
+		ctl.hcxt = log->mcxt;
+		log->path_map = hash_create("pathprobe path ids", 256, &ctl,
+									HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+	}
+
+	e = (PathMapEntry *) hash_search(log->path_map, &path, HASH_ENTER, &found);
+	if (found && e->type == nodeTag(path) && e->parent == path->parent)
+		return e->id;
+
+	/* a new path, or a freed one's address reused for a different path */
+	if (log->nnodes >= log->nodes_cap)
+	{
+		MemoryContext old = MemoryContextSwitchTo(log->mcxt);
+
+		log->nodes_cap = log->nodes_cap ? log->nodes_cap * 2 : 128;
+		log->nodes = log->nodes ?
+			repalloc(log->nodes, log->nodes_cap * sizeof(PathNode)) :
+			palloc(log->nodes_cap * sizeof(PathNode));
+		MemoryContextSwitchTo(old);
+	}
+	idx = log->nnodes++;
+	id = idx + 1;
+	e->id = id;
+	e->type = nodeTag(path);
+	e->parent = path->parent;
+
+	/* children first; nodes[] may be reallocated by the recursion */
+	if (IsA(path, NestPath) || IsA(path, MergePath) || IsA(path, HashPath))
+	{
+		outer = pelog_register_path(log, ((JoinPath *) path)->outerjoinpath);
+		inner = pelog_register_path(log, ((JoinPath *) path)->innerjoinpath);
+	}
+	else if ((child = path_single_input(path)) != NULL)
+		sub = pelog_register_path(log, child);
+
+	log->nodes[idx].id = id;
+	log->nodes[idx].pathtype = path->pathtype;
+	log->nodes[idx].relids = path->parent ?
+		pelog_intern_relids(log, path->parent->relids) : NULL;
+	log->nodes[idx].subpath_id = sub;
+	log->nodes[idx].outer_path_id = outer;
+	log->nodes[idx].inner_path_id = inner;
+	return id;
+}
+
+/*
+ * pelog_path_id - id of path in this log, registering it (and any child
+ * paths it refers to) on first sight.  Returns 0 once the event log is full,
+ * so the node table stays bounded with the events.
+ */
+int
+pelog_path_id(PathEventLog *log, Path *path)
+{
+	int			cap = pathprobe_agent_mode ?
+		Min(pathprobe_max_events, 10000) : pathprobe_max_events;
+
+	if (log == NULL || path == NULL || log->nevents >= cap)
+		return 0;
+	return pelog_register_path(log, path);
+}
+
+/* the planner is about to free path: its address may be reused */
+void
+pelog_path_forget(PathEventLog *log, Path *path)
+{
+	if (log == NULL || log->path_map == NULL || path == NULL)
+		return;
+	(void) hash_search(log->path_map, &path, HASH_REMOVE, NULL);
+}
+
+/* -------------------------------------------------------------------------
  * pelog_build_rtmap
  *
  * Build rtindex -> relname mapping from Query->rtable.
@@ -539,6 +695,7 @@ probe0_set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 		ev.disabled_nodes = path->disabled_nodes;
 		ev.relids = bms_copy(rel->relids);	/* snapshot */
 		strlcpy(ev.relname, relname, sizeof(ev.relname));
+		ev.path_id = pelog_path_id(pathprobe_active_log, path);
 
 		/* reverse-case annotation (string literals: static lifetime) */
 		if (path == cheap_startup && cheap_startup != cheap_total)

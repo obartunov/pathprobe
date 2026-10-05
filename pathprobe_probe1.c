@@ -76,7 +76,11 @@ probe1_rejected_hook(RelOptInfo *rel, Path *new_path, Path *dominated_by)
 
 	/* Apply min_gap filter */
 	if (pathprobe_min_gap > 0.0 && fabs(gap) < pathprobe_min_gap)
+	{
+		if (!IsA(new_path, IndexPath))
+			pelog_path_forget(pathprobe_active_log, new_path);
 		return;
+	}
 
 	memset(&ev, 0, sizeof(ev));
 
@@ -106,7 +110,12 @@ probe1_rejected_hook(RelOptInfo *rel, Path *new_path, Path *dominated_by)
 		if (pname)
 			ev.label = MemoryContextStrdup(pathprobe_active_log->mcxt, pname);
 	}
+	ev.path_id = pelog_path_id(pathprobe_active_log, new_path);
 	pelog_append(pathprobe_active_log, &ev);
+
+	/* add_path() frees a rejected path unless it is an IndexPath */
+	if (!IsA(new_path, IndexPath))
+		pelog_path_forget(pathprobe_active_log, new_path);
 }
 
 /*
@@ -126,7 +135,15 @@ probe1_accepted_hook(RelOptInfo *rel, Path *new_path, List *dominated_list)
 		return;
 
 	if (!pathprobe_log_accepted)
+	{
+		/* not recorded, but add_path() frees them: forget their ids */
+		foreach_ptr(Path, old_path, dominated_list)
+		{
+			if (!IsA(old_path, IndexPath))
+				pelog_path_forget(pathprobe_active_log, old_path);
+		}
 		return;
+	}
 
 	memset(&ev, 0, sizeof(ev));
 
@@ -158,7 +175,8 @@ probe1_accepted_hook(RelOptInfo *rel, Path *new_path, List *dominated_list)
 		if (pname)
 			ev.label = MemoryContextStrdup(pathprobe_active_log->mcxt, pname);
 	}
-	pelog_append(pathprobe_active_log, &ev);
+	ev.path_id = pelog_path_id(pathprobe_active_log, new_path);
+	pelog_append(pathprobe_active_log, &ev);	/* sets ev.seq, or 0 if full */
 
 	/*
 	 * One DISPLACED event per path that new_path removed from the pathlist.
@@ -184,7 +202,14 @@ probe1_accepted_hook(RelOptInfo *rel, Path *new_path, List *dominated_list)
 		dev.other_pathtype = new_path->pathtype;
 		if (dname)
 			dev.label = MemoryContextStrdup(pathprobe_active_log->mcxt, dname);
+		dev.path_id = pelog_path_id(pathprobe_active_log, old_path);
+		dev.link_path_id = ev.path_id;
+		dev.link_seq = ev.seq;
 		pelog_append(pathprobe_active_log, &dev);
+
+		/* freed by add_path() after this hook, unless an IndexPath */
+		if (!IsA(old_path, IndexPath))
+			pelog_path_forget(pathprobe_active_log, old_path);
 	}
 }
 

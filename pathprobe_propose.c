@@ -1289,6 +1289,7 @@ hypo_inject_one(PlannerInfo *root, RelOptInfo *rel,
 			ev.disabled_nodes = p->disabled_nodes;
 			ev.label = MemoryContextStrdup(pathprobe_active_log->mcxt,
 										   psprintf("hypo:%s", h->name));
+			ev.path_id = pelog_path_id(pathprobe_active_log, p);
 			pelog_append(pathprobe_active_log, &ev);
 		}
 	}
@@ -1430,6 +1431,7 @@ propose_inject_one(PlannerInfo *root, RelOptInfo *rel,
 		ev.disabled_nodes = cpath->path.disabled_nodes;
 		ev.label = MemoryContextStrdup(pathprobe_active_log->mcxt,
 									   spec->pathname);
+		ev.path_id = pelog_path_id(pathprobe_active_log, (Path *) cpath);
 		pelog_append(pathprobe_active_log, &ev);
 	}
 }

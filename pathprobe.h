@@ -135,7 +135,32 @@ typedef struct PathEvent
 
 	/* proposed path label (wp, may be NULL)        */
 	const char *label;
+
+	/*
+	 * Path identity within this log (see pelog_path_id); 0 when the event
+	 * has no Path (SKIPPED, EXCLUDED).  For DISPLACED, link_path_id is the
+	 * path that displaced this one and link_seq the seq of its ACCEPTED
+	 * event (0 if that event was not recorded).
+	 */
+	int			path_id;
+	int			link_path_id;
+	int			link_seq;
 } PathEvent;
+
+/*
+ * PathNode - one Path seen during the probe, by id.  Edges to child paths
+ * are recorded when the node is first registered; a child that never had
+ * an event of its own still gets a node.  0 means no such edge.
+ */
+typedef struct PathNode
+{
+	int			id;
+	NodeTag		pathtype;
+	Relids		relids;			/* interned */
+	int			subpath_id;		/* single-input wrapper, BitmapHeapScan */
+	int			outer_path_id;	/* join paths */
+	int			inner_path_id;
+} PathNode;
 
 /* ----------
  * PathEventLog - primary layer
@@ -179,6 +204,12 @@ typedef struct PathEventLog
 	PathRelidsPool relids_pool; /* interned relids, avoid per-event bms_copy */
 	bool		events_truncated;	/* max_events hit: picture incomplete */
 	uint32		coverage;		/* PP_COV_* decision points observed */
+
+	/* path identity: Path pointer -> id while planning, nodes for output */
+	struct HTAB *path_map;
+	PathNode   *nodes;			/* nodes[id - 1] */
+	int			nnodes;
+	int			nodes_cap;
 } PathEventLog;
 
 /*
@@ -274,6 +305,8 @@ extern PathSummary *pelog_build_summary(PathEventLog *log, MemoryContext mcxt);
 extern PathEventLog *pelog_create(MemoryContext mcxt);
 extern void pelog_append(PathEventLog *log, PathEvent *ev);
 extern Relids pelog_intern_relids(PathEventLog *log, Relids r);
+extern int	pelog_path_id(PathEventLog *log, Path *path);
+extern void pelog_path_forget(PathEventLog *log, Path *path);
 extern void pelog_build_rtmap(PathEventLog *log, List *rtable);
 
 /*

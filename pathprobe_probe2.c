@@ -185,6 +185,7 @@ probe2_join_pathlist_hook(PlannerInfo *root, RelOptInfo *joinrel,
 				 path->pathkeys != NIL)
 			ev.label = "  kept: order?";
 
+		ev.path_id = pelog_path_id(pathprobe_active_log, path);
 		pelog_append(pathprobe_active_log, &ev);
 	}
 }

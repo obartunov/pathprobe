@@ -164,6 +164,24 @@ render_json(PathProbeReport *report, StringInfo out, PathProbeOpts *opts,
 		appendStringInfo(out, ",\"cost_total\":%.2f", ev->cost_total);
 		appendStringInfoString(out, ",\"kind\":");
 		json_str(out, kind_str);
+		if (ev->path_id > 0)
+			appendStringInfo(out, ",\"path_id\":%d", ev->path_id);
+		else
+			appendStringInfoString(out, ",\"path_id\":null");
+		if (ev->kind == PEK_DISPLACED)
+		{
+			if (ev->link_path_id > 0)
+				appendStringInfo(out, ",\"displacer_path_id\":%d",
+								 ev->link_path_id);
+			else
+				appendStringInfoString(out, ",\"displacer_path_id\":null");
+			if (ev->link_seq > 0)
+				appendStringInfo(out, ",\"displacer_seq\":%d", ev->link_seq);
+			else
+				appendStringInfoString(out, ",\"displacer_seq\":null");
+			appendStringInfoString(out, ",\"other_pathtype\":");
+			json_str(out, pathtype_name(ev->other_pathtype));
+		}
 		if (ev->label)
 		{
 			appendStringInfoString(out, ",\"label\":");
@@ -197,6 +215,32 @@ render_json(PathProbeReport *report, StringInfo out, PathProbeOpts *opts,
 		appendStringInfoChar(out, '}');
 	}
 	appendStringInfoString(out, "\n  ],\n");
+
+	/* path nodes: identity and child edges of every path_id above */
+	appendStringInfoString(out, "  \"paths\": [");
+	for (i = 0; i < log->nnodes; i++)
+	{
+		PathNode   *n = &log->nodes[i];
+		char		rel_buf[32];
+
+		if (n->relids && !bms_is_empty(n->relids))
+			relids_to_str(n->relids, rel_buf, sizeof(rel_buf));
+		else
+			strlcpy(rel_buf, "?", sizeof(rel_buf));
+		appendStringInfo(out, "%s\n    {\"path_id\":%d,\"pathtype\":",
+						 i > 0 ? "," : "", n->id);
+		json_str(out, pathtype_name(n->pathtype));
+		appendStringInfoString(out, ",\"rel\":");
+		json_str(out, rel_buf);
+		if (n->subpath_id > 0)
+			appendStringInfo(out, ",\"subpath_id\":%d", n->subpath_id);
+		if (n->outer_path_id > 0)
+			appendStringInfo(out, ",\"outer_path_id\":%d", n->outer_path_id);
+		if (n->inner_path_id > 0)
+			appendStringInfo(out, ",\"inner_path_id\":%d", n->inner_path_id);
+		appendStringInfoChar(out, '}');
+	}
+	appendStringInfoString(out, log->nnodes > 0 ? "\n  ],\n" : "],\n");
 
 	/* summary array */
 	sum = pelog_build_summary(log, CurrentMemoryContext);
