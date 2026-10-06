@@ -315,4 +315,79 @@ SELECT
                    0 | removed       | t                                    | t                | t                        | true
 (1 row)
 
+-- 9. path properties: rows on every node except BitmapAnd / BitmapOr (the
+-- planner leaves them at 0, "not used"), required_outer of a parameterized
+-- path, the index of an index path, startup cost on every event
+CREATE TEMP VIEW gr_props AS
+SELECT (p->>'path_id')::int AS path_id, p->>'pathtype' AS pathtype, p->>'rel' AS rel,
+       p ? 'rows' AS has_rows, (p->>'rows')::float8 AS rows,
+       p->>'required_outer' AS required_outer,
+       (p->>'index_oid')::oid AS index_oid, p->>'index_name' AS index_name,
+       p ? 'hypothetical_index' AS hypo
+FROM gr_j, jsonb_array_elements(j->'paths') p;
+SELECT
+  (SELECT bool_and(index_name IN (SELECT indexrelid::regclass::text FROM pg_index
+                                  WHERE indrelid = 'gr_o'::regclass))
+          AND bool_or(index_name = 'gr_o_customer_idx')
+   FROM gr_props
+   WHERE rel = '{2}' AND pathtype IN ('IndexScan', 'IndexOnlyScan', 'BitmapHeapScan'))
+    AS inner_index_named,
+  (SELECT bool_and(index_name IS NOT NULL AND index_oid::regclass::text = index_name)
+   FROM gr_props WHERE pathtype IN ('IndexScan', 'IndexOnlyScan'))
+    AS index_paths_have_index,
+  (SELECT bool_and(index_name IS NULL AND index_oid IS NULL AND NOT hypo)
+   FROM gr_props WHERE pathtype NOT IN ('IndexScan', 'IndexOnlyScan', 'BitmapHeapScan'))
+    AS others_have_none,
+  (SELECT bool_and((rel = '{1}' AND required_outer = '{2}') OR
+                   (rel = '{2}' AND required_outer = '{1}'))
+          AND bool_or(rel = '{2}')
+   FROM gr_props WHERE required_outer IS NOT NULL)
+    AS required_outer_is_other_rel,
+  (SELECT bool_and(coalesce((e->>'param')::bool, false) = (p.required_outer IS NOT NULL))
+   FROM gr_j, jsonb_array_elements(j->'events') e
+   JOIN gr_props p ON p.path_id = (e->>'path_id')::int)
+    AS param_matches_required_outer,
+  (SELECT bool_and(has_rows AND rows > 0) FROM gr_props
+   WHERE pathtype NOT IN ('BitmapAnd', 'BitmapOr')) AS rows_positive,
+  (SELECT coalesce(bool_and(NOT has_rows), true) FROM gr_props
+   WHERE pathtype IN ('BitmapAnd', 'BitmapOr')) AS bitmap_sets_without_rows,
+  (SELECT bool_and((e->>'cost_startup')::float8 <= (e->>'cost_total')::float8)
+   FROM gr_j, jsonb_array_elements(j->'events') e) AS startup_le_total,
+  (SELECT bool_and(e ? 'cost_startup') FROM gr_j, jsonb_array_elements(j->'events') e)
+    AS every_event_has_startup;
+ inner_index_named | index_paths_have_index | others_have_none | required_outer_is_other_rel | param_matches_required_outer | rows_positive | bitmap_sets_without_rows | startup_le_total | every_event_has_startup 
+-------------------+------------------------+------------------+-----------------------------+------------------------------+---------------+--------------------------+------------------+-------------------------
+ t                 | t                      | t                | t                           | t                            | t             | t                        | t                | t
+(1 row)
+
+-- BitmapAnd / BitmapOr carry no rows; their children do
+SELECT m.name, m.pathtype, NOT p ? 'rows' AS no_rows,
+       (SELECT bool_and(c ? 'rows') FROM jsonb_array_elements(m.j->'paths') c
+        WHERE c->'path_id' IN (SELECT jsonb_array_elements(m.kids))) AS children_have_rows
+FROM gr_multi_paths m, jsonb_array_elements(m.j->'paths') p
+WHERE m.pathtype IN ('BitmapAnd', 'BitmapOr') AND (p->>'path_id')::int = m.path_id
+GROUP BY 1, 2, 3, 4 ORDER BY 1;
+    name    | pathtype  | no_rows | children_have_rows 
+------------+-----------+---------+--------------------
+ bitmap_and | BitmapAnd | t       | t
+ bitmap_or  | BitmapOr  | t       | t
+(2 rows)
+
+-- 10. a path over a hypothetical index names no index: its fake oid has no
+-- catalog entry; the hypo: label of its events identifies it
+WITH j AS (SELECT pathprobe_propose_json('SELECT * FROM gr_o WHERE amount = 5',
+             '{"hypo_indexes":[{"relname":"gr_o","columns":["amount"],"name":"gr_hypo"}]}')::jsonb AS j),
+     p AS (SELECT p FROM j, jsonb_array_elements(j->'paths') p
+           WHERE (p->>'hypothetical_index')::bool),
+     e AS (SELECT e FROM j, jsonb_array_elements(j->'events') e)
+SELECT (SELECT count(*) > 0 FROM p) AS has_hypo_path,
+       (SELECT bool_and(NOT p.p ? 'index_oid' AND NOT p.p ? 'index_name') FROM p)
+         AS no_oid_no_name,
+       (SELECT bool_or(e.e->>'label' = 'hypo:gr_hypo')
+        FROM e JOIN p ON e.e->'path_id' = p.p->'path_id') AS labelled;
+ has_hypo_path | no_oid_no_name | labelled 
+---------------+----------------+----------
+ t             | t              | t
+(1 row)
+
 DROP TABLE gr_o, gr_c;

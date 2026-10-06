@@ -936,6 +936,25 @@ sub check_correctness {
             }
             else { $id_label{$e->{path_id}} = $l; }
         }
+        # path metadata: startup cost on every event; rows on every node but
+        # BitmapAnd / BitmapOr; an index only on index paths; a hypothetical
+        # index never with an oid or name
+        for my $e (grep { ref $_ eq 'HASH' } @ev) {
+            push @fails, "event $e->{seq} without cost_startup" unless exists $e->{cost_startup};
+        }
+        for my $n (values %node) {
+            my $pt = $n->{pathtype} // '';
+            my $bitmap_set = $pt =~ /^Bitmap(And|Or)$/;
+            push @fails, "$pt node with rows" if $bitmap_set && exists $n->{rows};
+            push @fails, "$pt node without rows" if !$bitmap_set && !exists $n->{rows};
+            push @fails, "index on a $pt node"
+                if (exists $n->{index_oid} || exists $n->{hypothetical_index})
+                   && $pt !~ /^(IndexScan|IndexOnlyScan|BitmapHeapScan)$/;
+            push @fails, "hypothetical index with an oid or name"
+                if $n->{hypothetical_index} && (exists $n->{index_oid} || exists $n->{index_name});
+            push @fails, "index_name without index_oid"
+                if exists $n->{index_name} && !exists $n->{index_oid};
+        }
         # kept_reason marks real survivors only; label is for proposed paths
         for my $e (grep { ref $_ eq 'HASH' && defined $_->{kept_reason} } @ev) {
             push @fails, "kept_reason '$e->{kept_reason}' outside alphabet"
