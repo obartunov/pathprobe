@@ -923,20 +923,33 @@ sub check_correctness {
             }
         }
         # all events of one path_id are of one path: same type as its node,
-        # one label (the "kept: ..." annotation stored in label is a known
-        # defect and is ignored)
+        # one label
         my (%id_label);
         for my $e (grep { ref $_ eq 'HASH' && defined $_->{path_id} } @ev) {
             my $n = $node{$e->{path_id}} or next;
             push @fails, "path_id $e->{path_id}: event type $e->{pathtype} vs node $n->{pathtype}"
                 if ($e->{pathtype} // '') ne ($n->{pathtype} // '');
             my $l = $e->{label} // '';
-            next if $l =~ /^\s*kept:/;
             if (exists $id_label{$e->{path_id}}) {
                 push @fails, "path_id $e->{path_id} has events of '$id_label{$e->{path_id}}' and '$l'"
                     if $id_label{$e->{path_id}} ne $l;
             }
             else { $id_label{$e->{path_id}} = $l; }
+        }
+        # kept_reason marks real survivors only; label is for proposed paths
+        for my $e (grep { ref $_ eq 'HASH' && defined $_->{kept_reason} } @ev) {
+            push @fails, "kept_reason '$e->{kept_reason}' outside alphabet"
+                unless $e->{kept_reason} =~ /^(startup|order\?)$/;
+            push @fails, "kept_reason on a $e->{kind} event"
+                unless ($e->{kind} // '') eq 'survived';
+            push @fails, "kept_reason on a labelled or proposed event"
+                if defined $e->{label} || ($e->{origin} // '') ne 'real';
+        }
+        for my $e (grep { ref $_ eq 'HASH' && defined $_->{label} } @ev) {
+            push @fails, "label '$e->{label}' looks like a kept annotation"
+                if $e->{label} =~ /kept:/;
+            push @fails, "labelled event with origin '$e->{origin}'"
+                if ($e->{origin} // '') ne 'proposed';
         }
         # REMOVED is terminal for its path in its rel
         {
