@@ -2440,7 +2440,7 @@ render_propose_card(PathProbeReport *report, StringInfo out,
 	/* Retag CustomScan events -> PATH_SOURCE_PROPOSED before fate derivation */
 	retag_proposed_events(log);
 
-	/* Single pass: derive fate + effective winner */
+	/* Single pass: derive fate + pre-injection cheapest real path */
 	for (i = 0; i < log->nevents; i++)
 	{
 		PathEvent  *ev = &log->events[i];
@@ -2553,8 +2553,13 @@ render_propose_card(PathProbeReport *report, StringInfo out,
 	appendStringInfo(out, "fate     : %s%s\n", fate,
 					 log->events_truncated ?
 					 "  [events truncated: fate unreliable]" : "");
+	/*
+	 * winner_* is the cheapest real path in the probe0 snapshot of the
+	 * target rel, taken before the candidate was injected; it is not the
+	 * plan's winner.
+	 */
 	if (winner_set)
-		appendStringInfo(out, "winner   : %s @ %.2f\n",
+		appendStringInfo(out, "cheapest : %s @ %.2f (before injection)\n",
 						 pathtype_name(winner_type), winner_cost);
 	if (gap_valid)
 		appendStringInfo(out, "gap      : %+.2f\n", gap);
@@ -2571,10 +2576,10 @@ render_propose_card(PathProbeReport *report, StringInfo out,
 							   "CONTEXT\n"
 							   "----------------------------------------------------------------------\n");
 		if (wp_cost_set)
-			appendStringInfo(out, "raw best         : %s @ %.2f\n",
+			appendStringInfo(out, "raw best               : %s @ %.2f\n",
 							 spec->pathname, wp_best_cost);
 		if (winner_set)
-			appendStringInfo(out, "effective winner : %s @ %.2f\n",
+			appendStringInfo(out, "pre-injection cheapest : %s @ %.2f\n",
 							 pathtype_name(winner_type), winner_cost);
 		appendStringInfoChar(out, '\n');
 	}
