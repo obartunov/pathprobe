@@ -170,8 +170,9 @@ RESET pathprobe.log_accepted;
 
 -- 8. add_path() can remove old paths and then reject the new path: cN
 -- (ordered by region) removes cA (unordered, fuzzily as cheap) and is then
--- rejected by cB (ordered by region, id).  cA is freed without an event;
--- its id must be dropped, so that cD, allocated next at cA's address,
+-- rejected by cB (ordered by region, id).  cA gets a REMOVED event, not
+-- DISPLACED, and its fate is removed although it had survived its own
+-- add_path().  Its id is dropped, so cD, allocated next at cA's address,
 -- gets a new id.
 CREATE TEMP TABLE gr_rb AS
 SELECT pathprobe_propose_json('SELECT * FROM gr_c ORDER BY region, id', '{"candidates": [
@@ -188,17 +189,37 @@ SELECT pathprobe_propose_json('SELECT * FROM gr_c ORDER BY region, id', '{"candi
 ]}')::jsonb AS j;
 CREATE TEMP VIEW gr_rb_ev AS
 SELECT (e->>'seq')::int AS seq, e->>'kind' AS kind, e->>'rel' AS rel,
-       e->>'label' AS label, (e->>'path_id')::int AS path_id,
-       (e->>'dominator_path_id')::int AS dominator_path_id
+       e->>'label' AS label, e->>'pathtype' AS pathtype,
+       (e->>'path_id')::int AS path_id,
+       (e->>'dominator_path_id')::int AS dominator_path_id,
+       (e->>'remover_path_id')::int AS remover_path_id,
+       (e->>'remover_seq')::int AS remover_seq,
+       e->>'remover_pathtype' AS remover_pathtype
 FROM gr_rb, jsonb_array_elements(j->'events') e;
 SELECT seq, label, kind,
        (SELECT label FROM gr_rb_ev a WHERE a.path_id = r.dominator_path_id
           AND a.kind = 'accepted' LIMIT 1) AS dominator_label
 FROM gr_rb_ev r WHERE kind = 'rejected' AND label IS NOT NULL ORDER BY seq;
+-- the REMOVED event: cA's own id, linked to cN and to cN's REJECTED event
+SELECT m.seq, m.label, m.kind,
+       m.path_id = (SELECT path_id FROM gr_rb_ev WHERE label = 'cA' AND kind = 'accepted')
+         AS is_ca_original_id,
+       (SELECT label FROM gr_rb_ev x WHERE x.path_id = m.remover_path_id
+          AND x.kind = 'rejected') AS remover_label,
+       r.kind AS remover_seq_kind, r.label AS remover_seq_label,
+       r.path_id = m.remover_path_id AND r.seq < m.seq AS remover_seq_matches,
+       m.remover_pathtype = r.pathtype AS remover_pathtype_matches
+FROM gr_rb_ev m LEFT JOIN gr_rb_ev r ON r.seq = m.remover_seq
+WHERE m.kind = 'removed' ORDER BY m.seq;
+SELECT c->>'pathname' AS candidate, c->>'fate' AS fate,
+       c->'event_counts'->>'removed' AS removed
+FROM gr_rb, jsonb_array_elements(j->'candidates') c ORDER BY 1;
 SELECT
-  -- cA left the pathlist with cN, but no event says so (cN never entered it)
   (SELECT count(*) FROM gr_rb_ev WHERE label = 'cA' AND kind = 'displaced')
     AS ca_displaced_events,
+  -- REMOVED is cA's last event
+  (SELECT kind FROM gr_rb_ev WHERE label = 'cA' ORDER BY seq DESC LIMIT 1)
+    AS ca_last_event,
   (SELECT a.path_id <> d.path_id FROM gr_rb_ev a, gr_rb_ev d
    WHERE a.label = 'cA' AND a.kind = 'accepted' AND d.label = 'cD' AND d.kind = 'rejected')
     AS removed_before_reject_ids_not_reused,
@@ -209,7 +230,10 @@ SELECT
   (SELECT bool_and(x.path_id BETWEEN 1 AND jsonb_array_length(j->'paths'))
    FROM gr_rb, (SELECT path_id FROM gr_rb_ev WHERE path_id IS NOT NULL
                 UNION ALL SELECT dominator_path_id FROM gr_rb_ev
-                WHERE dominator_path_id IS NOT NULL) x)
-    AS every_reference_resolves;
+                WHERE dominator_path_id IS NOT NULL
+                UNION ALL SELECT remover_path_id FROM gr_rb_ev
+                WHERE remover_path_id IS NOT NULL) x)
+    AS every_reference_resolves,
+  (SELECT j->'coverage'->>'add_path_removed' FROM gr_rb) AS removal_covered;
 
 DROP TABLE gr_o, gr_c;

@@ -35,12 +35,12 @@ our @SPEC_SHAPES = qw(
 our @PARALLELISM = qw(pinned_off default forced_on);
 our @POLICIES    = qw(winner_forbidden_true winner_forbidden_false);
 our %HYPO_FATE_ALPHABET = map { $_ => 1 } qw(
-    target_not_found not_examined not_generated rejected displaced
+    target_not_found not_examined not_generated rejected displaced removed
     survived_at_point survived unknown inconsistent
 );
 our %FATE_ALPHABET = map { $_ => 1 } qw(
     target_not_found not_examined unknown rejected unknown_after_accept
-    survived_at_point survived displaced survived_upper
+    survived_at_point survived displaced removed survived_upper
 );
 
 # role dimension -> concrete SQL role (undef => RESET ROLE / superuser)
@@ -337,6 +337,7 @@ sub mandatory_correctness_cases {
                  .'{"target":{"relname":"allowed"},"candidate":{"pathname":"cD","provider":"m"},'
                  .'"cost":{"total_cost":10.5,"rows":1},"mode":{"winner_forbidden":true}}]}',
             allowed_fates=>undef, require=>['candidates','events'],
+            expect_cand_fates=>{cA=>'removed', cN=>'rejected'},
             dims=>{invariant=>'removed_before_reject'}),
     );
 }
@@ -873,6 +874,24 @@ sub check_correctness {
                     if $a && (($a->{rel} // '') ne ($e->{rel} // ''));
                 next;
             }
+            if ($k eq 'removed') {
+                my $rid = $e->{remover_path_id};
+                if (!defined $rid) { push @fails, "removed event without remover_path_id"; next; }
+                push @fails, "remover_path_id $rid not in paths[]" unless $node{$rid};
+                push @fails, "removed path is its own remover" if $rid == $e->{path_id};
+                my $rs = $e->{remover_seq};
+                next unless defined $rs;
+                my $r = $by_seq{$rs};
+                push @fails, "remover_seq $rs is not an earlier rejected event"
+                    unless $r && ($r->{kind} // '') eq 'rejected' && $rs < $e->{seq};
+                push @fails, "remover_path_id does not match the event at remover_seq"
+                    if $r && (($r->{path_id} // -1) != $rid);
+                push @fails, "remover rejected in another rel"
+                    if $r && (($r->{rel} // '') ne ($e->{rel} // ''));
+                push @fails, "remover_pathtype does not match the event at remover_seq"
+                    if $r && (($r->{pathtype} // '') ne ($e->{remover_pathtype} // ''));
+                next;
+            }
             next unless $k eq 'displaced';
             push @fails, "displacer_path_id $e->{displacer_path_id} not in paths[]"
                 if defined $e->{displacer_path_id} && !$node{$e->{displacer_path_id}};
@@ -919,6 +938,16 @@ sub check_correctness {
             }
             else { $id_label{$e->{path_id}} = $l; }
         }
+        # REMOVED is terminal for its path in its rel
+        {
+            my %gone;
+            for my $e (grep { ref $_ eq 'HASH' && defined $_->{path_id} } @ev) {
+                my $key = "$e->{path_id}\@" . ($e->{rel} // '');
+                push @fails, "path_id $e->{path_id} has a $e->{kind} event after removed"
+                    if $gone{$key};
+                $gone{$key} = 1 if ($e->{kind} // '') eq 'removed';
+            }
+        }
         for my $t (@{ $c->{expect_child_lists} // [] }) {
             push @fails, "no $t path with child_path_ids"
                 unless grep { ($_->{pathtype} // '') eq $t && @{ $_->{child_path_ids} // [] } } values %node;
@@ -934,6 +963,12 @@ sub check_correctness {
             push @fails, "candidate displaced($dis) > accepted($acc)" if $dis > $acc;
         }
         my $f = $cand->{fate} // '';
+        my $rem = $ec->{removed} // 0;
+        push @fails, "candidate removed($rem) but fate '$f'" if $rem && $f ne 'removed';
+        push @fails, "fate removed without a removed event" if $f eq 'removed' && !$rem;
+        if (my $want = ($c->{expect_cand_fates} // {})->{$cand->{pathname} // ''}) {
+            push @fails, "candidate $cand->{pathname}: fate '$f', expected '$want'" if $f ne $want;
+        }
         if ($f eq 'target_not_found' || $f eq 'not_examined') {
             push @fails, "$f but nonzero event_counts"
                 if $acc || ($ec->{rejected}//0) || $sur || $dis;
