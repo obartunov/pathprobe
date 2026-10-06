@@ -120,6 +120,11 @@ kept: order?
 `order?` means the path carries useful ordering information.  It does not prove
 that a parent node eventually used that order.
 
+In JSON the annotation is the `kept_reason` field of the event (`"startup"`
+or `"order?"`); `EXPLAIN (FORMAT JSON)` shows it as `Kept`.  It does not make
+the path a proposed one: `label` and `"origin": "proposed"` are only for
+proposed and hypothetical paths.
+
 ## Summary rows
 
 The summary is a derived view over events.  It shows search shape.

@@ -79,8 +79,11 @@ rejected (see "Removed before a rejection" below):
 Rules:
 
 ```text
-label should be present for proposed/hypothetical/advisor paths
-origin is real or proposed
+label is set only for proposed/hypothetical/advisor paths
+origin is real or proposed; it is proposed if label is set
+kept_reason is "startup" or "order?" on SURVIVED events (p0, j2) of a real
+  path kept in the pathlist without being the cheapest total; absent
+  otherwise
 cost fields are omitted when not meaningful or when costs are suppressed
 strings are JSON-escaped, never interpolated raw
 path_id is null for skipped and excluded events (no Path exists yet)

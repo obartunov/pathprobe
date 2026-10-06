@@ -36,6 +36,8 @@ but not displacement counts or the build decision.
   `"label": "  kept: order?"` and therefore `"origin": "proposed"` in JSON
   (`pathprobe.c` and `pathprobe_probe2.c` reuse the label field for the text
   annotation).  A tool that filters by `origin` or `label` miscounts.
+  Fixed: the annotation is the `kept_reason` field, and the event is
+  `"origin": "real"`.
 
 ### 2. Displaced paths
 
@@ -166,7 +168,7 @@ unknown / not_examined / not_generated
 Other findings, outside the list:
 
 ```text
-A  "kept: ..." stored in label, making origin "proposed"  JSON fix (defect)     follow-up, first
+A  "kept: ..." stored in label, making origin "proposed"  JSON fix (defect)     fixed (kept_reason)
 B  empty legacy target/candidate blocks without an        JSON change           follow-up; omit like
    explicit candidate                                     (removal)             the top-level fate
 C  advisor block with enabled=false carrying benefit      docs-only             documented (example 8)
@@ -179,11 +181,10 @@ H  text card "winner" and "note" lines                    text-output only      
 
 ## Proposed follow-ups
 
-In order of value.  None is implemented here.
+In order of value.  Items marked done were implemented after the audit.
 
-1. Keep `kept: startup` / `kept: order?` out of `label` (a separate event
-   field or text-only rendering), so `origin` stays `real` for real paths.
-   This is a correctness fix for tools that filter by origin or label.
+1. Done: `kept: startup` / `kept: order?` moved out of `label` into the
+   `kept_reason` event field, so `origin` stays `real` for real paths.
 2. Done: DISPLACED events name the displacer (`displacer_path_id`,
    `displacer_seq`, `other_pathtype`), REJECTED events the dominator
    (`dominator_path_id`, `dominator_seq`, `dominator_pathtype`; the core
