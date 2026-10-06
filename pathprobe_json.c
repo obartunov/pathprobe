@@ -223,6 +223,11 @@ render_json(PathProbeReport *report, StringInfo out, PathProbeOpts *opts,
 			appendStringInfoString(out, ",\"label\":");
 			json_str(out, ev->label);
 		}
+		if (ev->kept_reason)
+		{
+			appendStringInfoString(out, ",\"kept_reason\":");
+			json_str(out, ev->kept_reason);
+		}
 		appendStringInfo(out, ",\"origin\":\"%s\"",
 						 (ev->label != NULL ||
 						  ev->source == PATH_SOURCE_PROPOSED) ?

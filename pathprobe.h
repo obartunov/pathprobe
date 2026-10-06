@@ -139,6 +139,12 @@ typedef struct PathEvent
 	const char *label;
 
 	/*
+	 * Why a real survivor that is not the cheapest total path was kept
+	 * (probe0/probe2 snapshots): "startup", "order?" or NULL.
+	 */
+	const char *kept_reason;
+
+	/*
 	 * Path identity within this log (see pelog_path_id); 0 when the event
 	 * has no Path (SKIPPED, EXCLUDED).  link_* names the other path of the
 	 * add_path() decision: for DISPLACED the path that displaced this one,

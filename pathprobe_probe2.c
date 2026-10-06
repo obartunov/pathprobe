@@ -180,10 +180,10 @@ probe2_join_pathlist_hook(PlannerInfo *root, RelOptInfo *joinrel,
 
 		/* reverse-case annotation (string literals: static lifetime) */
 		if (path == cheap_startup && cheap_startup != cheap_total)
-			ev.label = "  kept: startup";
+			ev.kept_reason = "startup";
 		else if (path->param_info == NULL && path != cheap_total &&
 				 path->pathkeys != NIL)
-			ev.label = "  kept: order?";
+			ev.kept_reason = "order?";
 
 		ev.path_id = pelog_path_id(pathprobe_active_log, path);
 		pelog_append(pathprobe_active_log, &ev);

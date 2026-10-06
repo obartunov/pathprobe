@@ -822,10 +822,10 @@ probe0_set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 
 		/* reverse-case annotation (string literals: static lifetime) */
 		if (path == cheap_startup && cheap_startup != cheap_total)
-			ev.label = "  kept: startup";
+			ev.kept_reason = "startup";
 		else if (path->param_info == NULL && path != cheap_total &&
 				 path->pathkeys != NIL)
-			ev.label = "  kept: order?";
+			ev.kept_reason = "order?";
 
 		pelog_append(pathprobe_active_log, &ev);
 	}
@@ -1151,7 +1151,7 @@ render_text(PathProbeReport *report, StringInfo out, PathProbeOpts *opts)
 				snprintf(cost_col, sizeof(cost_col), "%10.2f", ev->cost_total);
 
 			appendStringInfo(out,
-							 "#%-4d %s  %-12s  %-20s  %s  %-22s  %s%s%s%s%s%s\n",
+							 "#%-4d %s  %-12s  %-20s  %s  %-22s  %s%s%s%s%s%s%s%s\n",
 							 ev->seq,
 							 src_str,
 							 rel_buf,
@@ -1164,8 +1164,10 @@ render_text(PathProbeReport *report, StringInfo out, PathProbeOpts *opts)
 							 : (ev->is_parameterized ? " [param]" : ""),
 							 origin_str,
 							 (ev->disabled_nodes > 0) ? " disabled" : "",
-							 (ev->label && ev->label[0] != ' ') ? " " : "",
-							 ev->label ? ev->label : "");
+							 ev->label ? " " : "",
+							 ev->label ? ev->label : "",
+							 ev->kept_reason ? "  kept: " : "",
+							 ev->kept_reason ? ev->kept_reason : "");
 
 			/* verbose: competitor name */
 			if (opts->verbose && ev->other_pathtype != T_Invalid)
@@ -1406,15 +1408,8 @@ pathprobe_emit_structured(PathEventLog *log, ExplainState *es)
 		}
 		if (ev->disabled_nodes > 0)
 			ExplainPropertyInteger("Disabled Nodes", NULL, ev->disabled_nodes, es);
-		if (ev->label)
-		{
-			/* strip the "  kept: " text-render padding for the field value */
-			const char *lbl = ev->label;
-
-			while (*lbl == ' ')
-				lbl++;
-			ExplainPropertyText("Kept", lbl, es);
-		}
+		if (ev->kept_reason)
+			ExplainPropertyText("Kept", ev->kept_reason, es);
 		ExplainCloseGroup("Path", NULL, true, es);
 	}
 	ExplainCloseGroup("PathProbe", "PathProbe", false, es);
