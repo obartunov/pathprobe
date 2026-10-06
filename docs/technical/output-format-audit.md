@@ -264,3 +264,11 @@ jq -r '.paths[] | select(.child_path_ids) |
   [.path_id, .pathtype, .rel, (.child_path_ids | map(tostring) | join(","))]
   | @tsv'
 ```
+
+## Acknowledgements
+
+The `kept_reason` split (item A) and the path metadata fields
+(`cost_startup`, `rows`, `required_outer`, `index_oid`, `index_name`,
+`hypothetical_index`) were adapted from dashboard feedback and patches by
+Dmitry Bulashev:
+https://github.com/dbulashev/postgres/tree/pathprobe-image/.github/pathprobe/pathprobe-patches

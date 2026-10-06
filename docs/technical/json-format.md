@@ -396,3 +396,11 @@ index_build                            core hooks patch with the index path
 Summary rows are useful for search-shape analysis.  They should not be used as a
 replacement for labeled candidate events.  There is no displaced column; count
 `displaced` events in `events[]`.
+
+## Acknowledgements
+
+`kept_reason` and the path metadata in `events[]` and `paths[]`
+(`cost_startup`, `rows`, `required_outer`, `index_oid`, `index_name`,
+`hypothetical_index`) were adapted from dashboard feedback and patches by
+Dmitry Bulashev:
+https://github.com/dbulashev/postgres/tree/pathprobe-image/.github/pathprobe/pathprobe-patches
