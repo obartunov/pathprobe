@@ -347,6 +347,8 @@ extern void probe1_rejected_hook(RelOptInfo *rel, Path *new_path,
 								 Path *dominated_by);
 extern void probe1_accepted_hook(RelOptInfo *rel, Path *new_path,
 								 List *dominated_list);
+extern void probe1_removed_hook(RelOptInfo *rel, Path *new_path,
+								List *removed_list);
 
 /* GUC: enable probe2 join hooks */
 __attribute__((visibility("default")))

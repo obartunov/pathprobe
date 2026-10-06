@@ -1492,6 +1492,9 @@ _PG_init(void)
 	pathprobe_path_accepted_hook = probe1_accepted_hook;
 	pathprobe_path_skipped_hook = probe_skipped_hook;
 #endif
+#ifdef HAVE_PATHPROBE_REMOVED_HOOK
+	pathprobe_path_removed_hook = probe1_removed_hook;
+#endif
 
 	/* probe2: join-level hooks (no core patch required) */
 	/* hooks always installed; the GUC gates logging inside (runtime-safe) */
@@ -1514,6 +1517,9 @@ _PG_fini(void)
 	pathprobe_path_rejected_hook = NULL;
 	pathprobe_path_accepted_hook = NULL;
 	pathprobe_path_skipped_hook = NULL;
+#endif
+#ifdef HAVE_PATHPROBE_REMOVED_HOOK
+	pathprobe_path_removed_hook = NULL;
 #endif
 	probe2_fini();				/* safe to call even if not init'd */
 }

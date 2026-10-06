@@ -9,10 +9,11 @@
  *
  * Requires: pathprobe_add_path.patch applied to PostgreSQL master.
  *
- * The patch exposes two hooks in pathnode.c / pathnode.h:
+ * The patch exposes these hooks in pathnode.c / pathnode.h:
  *
  *   pathprobe_path_rejected_hook(rel, new_path, dominated_by)
  *   pathprobe_path_accepted_hook(rel, new_path, dominated_list)
+ *   pathprobe_path_removed_hook(rel, new_path, removed_list)
  *
  * This adapter writes events to pathprobe_active_log when active.
  * kind=PEK_REJECTED / PEK_ACCEPTED, source=PATH_SOURCE_ADD_PATH.
@@ -226,6 +227,30 @@ probe1_accepted_hook(RelOptInfo *rel, Path *new_path, List *dominated_list)
 		pelog_append(pathprobe_active_log, &dev);
 
 		/* freed by add_path() after this hook, unless an IndexPath */
+		if (!IsA(old_path, IndexPath))
+			pelog_path_forget(pathprobe_active_log, old_path);
+	}
+}
+
+/*
+ * probe1_removed_hook
+ *
+ * Called by add_path() after the rejected hook, when new_path removed old
+ * paths from the pathlist before an old path was found to dominate it.
+ * add_path() frees them (except IndexPaths) when this returns.  No event is
+ * recorded: their remover never entered the pathlist, so a DISPLACED event
+ * would name a displacer that has no ACCEPTED event.  Only the path ids are
+ * dropped, so a later path at a recycled address gets a new id.  This runs
+ * whether or not acceptance is logged.
+ */
+void
+probe1_removed_hook(RelOptInfo *rel, Path *new_path, List *removed_list)
+{
+	if (pathprobe_active_log == NULL)
+		return;
+
+	foreach_ptr(Path, old_path, removed_list)
+	{
 		if (!IsA(old_path, IndexPath))
 			pelog_path_forget(pathprobe_active_log, old_path);
 	}
