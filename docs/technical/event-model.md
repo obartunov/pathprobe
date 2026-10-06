@@ -56,6 +56,10 @@ survived  path was present in an observed frontier
 displaced previously accepted path was pushed out
 ```
 
+`displaced` needs a displacer that was accepted.  When `add_path()` removes
+old paths and then rejects the new path, the removed paths get no event;
+pathprobe only drops their path ids.
+
 ## Absent events
 
 Four different reasons can leave a target without events, and the fates keep

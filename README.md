@@ -250,7 +250,8 @@ docs/testing/                     model-based tests, generator, test matrix
   drops produce no DISPLACED event.
 - `path_id` may conflate join paths under GEQO, and any paths without the
   core patch.  Old paths that `add_path()` removes before rejecting the new
-  path are freed without a DISPLACED event.
+  path get no event (their ids are dropped); their last event is still
+  ACCEPTED or SURVIVED.
 - The advisor is a local candidate generator with known defects (OR
   clauses, duplicate expression indexes, hypothetical btree costing); see
   [advisor audit](docs/technical/advisor-audit.md).

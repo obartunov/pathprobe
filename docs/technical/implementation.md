@@ -100,7 +100,10 @@ to a per-log id, plus a node table (`PathNode`: type, relids, child edges)
 that the JSON renderer emits as `paths[]`.  Children of join, single-input
 wrapper and multi-input paths are registered with their parent.  The probe1
 hooks call `pelog_path_forget` for every path `add_path()` is about to free,
-also when acceptance is not logged, so a recycled address gets a new id.
+also when acceptance is not logged, so a recycled address gets a new id:
+the rejected new path, the displaced paths of an accepted one, and, through
+`probe1_removed_hook`, old paths that a new path removed before it was
+itself rejected (no event for those).
 The map entry also keeps the seq of the path's last ACCEPTED event and the
 rel it went into (`pelog_path_accepted`), which the rejected hook uses for
 `dominator_seq`.

@@ -161,12 +161,23 @@ memory gets a new id.
 Limits: with GEQO the planner frees join paths by resetting memory without
 `add_path()`, so ids of join paths may be conflated there (a node-type and
 parent-rel check guards against most cases); without the core hooks patch
-pathprobe does not see any free, so the same holds for every path.  When
-`add_path()` removes old paths and then finds one that dominates the new
-path, it frees the removed paths without an event (no DISPLACED, and their
-ids are not dropped from the map); this needs a non-transitive fuzzy cost
-comparison and has not been measured.  `paths[]` is in the JSON only; the
-text output and the `EXPLAIN` integration do not show ids.
+pathprobe does not see any free, so the same holds for every path.
+`paths[]` is in the JSON only; the text output and the `EXPLAIN`
+integration do not show ids.
+
+`add_path()` can remove old paths that the new path dominates and then find
+a later old path that dominates the new one (fuzzy cost comparison is not
+transitive).  The new path is rejected, and the removed paths are freed
+too.  The core patch reports them to pathprobe
+(`HAVE_PATHPROBE_REMOVED_HOOK`), which drops their ids, so a later path at
+a recycled address gets a new id.  This is registry bookkeeping only: no
+event is emitted, because the remover never entered the pathlist and a
+DISPLACED event would name a displacer with no ACCEPTED event.  Such a
+removed path's last event is therefore its ACCEPTED (or SURVIVED) event,
+although it is no longer in the pathlist; a proposed candidate removed this
+way keeps the fate `survived`.  With an older copy of the core
+patch these ids are not dropped and may be reused.  The core regression
+suite produces no such removal; injected candidates with close costs do.
 
 The exact dominator needs a server built with the current core patch; it
 defines `HAVE_PATHPROBE_REJECTED_DOMINATOR`.  An older copy of the patch
