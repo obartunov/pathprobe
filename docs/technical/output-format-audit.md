@@ -49,9 +49,9 @@ but not displacement counts or the build decision.
   `survived` needs the docs.
 - Text card: `winner` is the cheapest real path in the relation's snapshot
   taken before injection, not the plan winner.  The `note: candidate won --
-  execution will fail` line is derived from any SURVIVED event of the
-  candidate, including the snapshot right after its own `add_path()`, so the
-  displaced `early` is also reported as having won.
+  execution will fail` line used to follow any SURVIVED event of the
+  candidate, so the displaced `early` was reported as having won; it now
+  follows the final fate (`survived` or `survived_upper` only).
 
 ### 3. target_not_found / not_examined / unknown
 
@@ -172,7 +172,8 @@ D  hypothetical index events with origin "proposed"       docs-only             
 E  index_build.generated counts calls                     docs-only             documented
 F  counts include upper-rel events, fate does not         docs-only             documented
 G  advisor skipped clauses not reported                   JSON additive field   later
-H  text card "winner" and "note" lines                    text-output only      follow-up
+H  text card "winner" and "note" lines                    text-output only      note fixed; winner
+                                                                                follow-up
 ```
 
 ## Proposed follow-ups
