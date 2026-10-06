@@ -457,6 +457,23 @@ path_single_input(Path *path)
 }
 
 /*
+ * The index an index path scans: IndexScan and IndexOnlyScan, or a
+ * BitmapHeapScan over a single index; NULL for BitmapAnd / BitmapOr
+ * (several indexes) and other paths.
+ */
+static const IndexOptInfo *
+path_index(const Path *path)
+{
+	if (path == NULL)
+		return NULL;
+	if (IsA(path, IndexPath))
+		return ((const IndexPath *) path)->indexinfo;
+	if (IsA(path, BitmapHeapPath))
+		return path_index(((const BitmapHeapPath *) path)->bitmapqual);
+	return NULL;
+}
+
+/*
  * The inputs of a path that has a list of them (or, for SetOp and
  * RecursiveUnion, a left and a right input).  Returns false for any other
  * path.  *list and *pair are set; pair inputs follow the list ones.
@@ -512,6 +529,7 @@ pelog_register_path(PathEventLog *log, Path *path)
 	bool		has_children;
 	int			nchildren = 0;
 	int		   *child_ids = NULL;
+	const IndexOptInfo *index;
 
 	if (path == NULL)
 		return 0;
@@ -583,6 +601,14 @@ pelog_register_path(PathEventLog *log, Path *path)
 	log->nodes[idx].has_children = has_children;
 	log->nodes[idx].nchildren = nchildren;
 	log->nodes[idx].child_ids = child_ids;
+	/* BitmapAnd and BitmapOr leave rows at 0, "not used" (costsize.c) */
+	log->nodes[idx].rows =
+		(IsA(path, BitmapAndPath) || IsA(path, BitmapOrPath)) ? -1 : path->rows;
+	log->nodes[idx].required_outer =
+		pelog_intern_relids(log, PATH_REQ_OUTER(path));
+	index = path_index(path);
+	log->nodes[idx].index_oid = index ? index->indexoid : InvalidOid;
+	log->nodes[idx].hypothetical_index = index ? index->hypothetical : false;
 	return id;
 }
 

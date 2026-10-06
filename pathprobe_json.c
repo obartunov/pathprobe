@@ -33,6 +33,7 @@
 #include "lib/stringinfo.h"
 #include "nodes/bitmapset.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
 
 #include "pathprobe.h"
@@ -164,6 +165,7 @@ render_json(PathProbeReport *report, StringInfo out, PathProbeOpts *opts,
 		json_str(out, rel_buf);
 		appendStringInfoString(out, ",\"pathtype\":");
 		json_str(out, pathtype_name(ev->pathtype));
+		appendStringInfo(out, ",\"cost_startup\":%.2f", ev->cost_startup);
 		appendStringInfo(out, ",\"cost_total\":%.2f", ev->cost_total);
 		appendStringInfoString(out, ",\"kind\":");
 		json_str(out, kind_str);
@@ -285,6 +287,34 @@ render_json(PathProbeReport *report, StringInfo out, PathProbeOpts *opts,
 			for (int c = 0; c < n->nchildren; c++)
 				appendStringInfo(out, c ? ",%d" : "%d", n->child_ids[c]);
 			appendStringInfoChar(out, ']');
+		}
+		if (n->rows >= 0)
+			appendStringInfo(out, ",\"rows\":%.0f", n->rows);
+		if (n->required_outer)
+		{
+			relids_to_str(n->required_outer, rel_buf, sizeof(rel_buf));
+			appendStringInfoString(out, ",\"required_outer\":");
+			json_str(out, rel_buf);
+		}
+
+		/*
+		 * A hypothetical index has a fake oid without a catalog entry, and
+		 * the number may belong to a real relation: report neither.  Its
+		 * paths are identified by the hypo:<name> label of their events.
+		 */
+		if (n->hypothetical_index)
+			appendStringInfoString(out, ",\"hypothetical_index\":true");
+		else if (OidIsValid(n->index_oid))
+		{
+			char	   *iname = get_rel_name(n->index_oid);
+
+			appendStringInfo(out, ",\"index_oid\":%u", n->index_oid);
+			if (iname)
+			{
+				appendStringInfoString(out, ",\"index_name\":");
+				json_str(out, iname);
+				pfree(iname);
+			}
 		}
 		appendStringInfoChar(out, '}');
 	}

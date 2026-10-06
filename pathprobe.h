@@ -176,6 +176,17 @@ typedef struct PathNode
 	bool		has_children;	/* a node with a list of inputs */
 	int			nchildren;
 	int		   *child_ids;		/* in the path's own input order */
+
+	/*
+	 * Properties that do not change after a Path is built, read when the
+	 * node is registered, while the Path is live.
+	 */
+	double		rows;			/* path->rows; -1 where the planner does not
+								 * set it (BitmapAnd, BitmapOr) */
+	Relids		required_outer; /* interned; NULL if unparameterized */
+	Oid			index_oid;		/* IndexScan/IndexOnlyScan, BitmapHeapScan
+								 * over one index; InvalidOid otherwise */
+	bool		hypothetical_index; /* index_oid is a pathprobe fake oid */
 } PathNode;
 
 /* ----------
