@@ -161,5 +161,69 @@ WHERE line LIKE 'hypo:%';
  fate=target_not_found
 (2 rows)
 
+-- 6. the text card's note follows the final candidate fate, not any
+-- SURVIVED snapshot: only survived and survived_upper candidates "won"
+-- (survived_at_point needs displacement or removal to be uncovered, which
+-- the propose functions do not allow on a patched server)
+CREATE TABLE lc_n (id int PRIMARY KEY, region int);
+INSERT INTO lc_n SELECT g, g % 10 FROM generate_series(1, 10000) g;
+CREATE TABLE lc_m (id int PRIMARY KEY, n_id int);
+INSERT INTO lc_m SELECT g, g % 10000 + 1 FROM generate_series(1, 20000) g;
+ANALYZE lc_n, lc_m;
+CREATE FUNCTION lc_card(q text, spec text) RETURNS SETOF text
+LANGUAGE sql AS $$
+  SELECT line FROM regexp_split_to_table(pathprobe_propose(q, spec), E'\n') line
+  WHERE line ~ '^(pathname|fate     |note     )'
+$$;
+-- 6a. cA survives its add_path(), is removed by cN, which cB then rejects
+SELECT lc_card('SELECT * FROM lc_n ORDER BY region, id', '{"candidates": [
+  {"target": {"relname": "lc_n"}, "candidate": {"pathname": "cA", "provider": "t"},
+   "cost": {"total_cost": 10.0, "rows": 1}},
+  {"target": {"relname": "lc_n"}, "candidate": {"pathname": "cB", "provider": "t"},
+   "cost": {"total_cost": 10.15, "rows": 1}, "planner": {"pathkeys": ["region", "id"]}},
+  {"target": {"relname": "lc_n"}, "candidate": {"pathname": "cN", "provider": "t"},
+   "cost": {"total_cost": 10.09, "rows": 1}, "planner": {"pathkeys": ["region"]}},
+  {"target": {"relname": "lc_n"}, "candidate": {"pathname": "cD", "provider": "t"},
+   "cost": {"total_cost": 10.5, "rows": 1}}]}');
+                                   lc_card                                    
+------------------------------------------------------------------------------
+ pathname : cA
+ fate     : accepted -> removed (by a path that was then rejected)
+ pathname : cB
+ fate     : survived (reached upper rel)
+ note     : candidate won -- execution will fail in v0 (diagnostic mode only)
+ pathname : cN
+ fate     : rejected
+ pathname : cD
+ fate     : rejected
+(9 rows)
+
+-- 6b. early survives its add_path() and is displaced by late
+SELECT lc_card('SELECT * FROM lc_n WHERE id < 50', '{"candidates": [
+  {"target": {"relname": "lc_n"}, "candidate": {"pathname": "early", "provider": "t"},
+   "cost": {"total_cost": 5.0, "rows": 1}},
+  {"target": {"relname": "lc_n"}, "candidate": {"pathname": "late", "provider": "t"},
+   "cost": {"total_cost": 1.0, "rows": 1}}]}');
+                                   lc_card                                    
+------------------------------------------------------------------------------
+ pathname : early
+ fate     : accepted -> displaced
+ pathname : late
+ fate     : survived (reached upper rel)
+ note     : candidate won -- execution will fail in v0 (diagnostic mode only)
+(5 rows)
+
+-- 6c. survived at the base rel, not carried up as itself
+SELECT lc_card('SELECT * FROM lc_n n JOIN lc_m m ON m.n_id = n.id',
+  '{"target": {"relname": "lc_m"}, "candidate": {"pathname": "j", "provider": "t"},
+    "cost": {"total_cost": 100.0, "rows": 20000}}');
+                                   lc_card                                    
+------------------------------------------------------------------------------
+ pathname : j
+ fate     : survived
+ note     : candidate won -- execution will fail in v0 (diagnostic mode only)
+(3 rows)
+
+DROP FUNCTION lc_card(text, text);
 DROP FUNCTION lc_hypo(text, text);
-DROP TABLE lc_a, lc_b, lc_h;
+DROP TABLE lc_a, lc_b, lc_h, lc_n, lc_m;
