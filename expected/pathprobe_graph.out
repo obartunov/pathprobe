@@ -224,4 +224,58 @@ GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
 (2 rows)
 
 RESET pathprobe.log_accepted;
+-- 8. add_path() can remove old paths and then reject the new path: cN
+-- (ordered by region) removes cA (unordered, fuzzily as cheap) and is then
+-- rejected by cB (ordered by region, id).  cA is freed without an event;
+-- its id must be dropped, so that cD, allocated next at cA's address,
+-- gets a new id.
+CREATE TEMP TABLE gr_rb AS
+SELECT pathprobe_propose_json('SELECT * FROM gr_c ORDER BY region, id', '{"candidates": [
+  {"target": {"relname": "gr_c"}, "candidate": {"pathname": "cA", "provider": "t"},
+   "cost": {"total_cost": 10.0, "rows": 1}, "mode": {"winner_forbidden": true}},
+  {"target": {"relname": "gr_c"}, "candidate": {"pathname": "cB", "provider": "t"},
+   "cost": {"total_cost": 10.15, "rows": 1}, "planner": {"pathkeys": ["region", "id"]},
+   "mode": {"winner_forbidden": true}},
+  {"target": {"relname": "gr_c"}, "candidate": {"pathname": "cN", "provider": "t"},
+   "cost": {"total_cost": 10.09, "rows": 1}, "planner": {"pathkeys": ["region"]},
+   "mode": {"winner_forbidden": true}},
+  {"target": {"relname": "gr_c"}, "candidate": {"pathname": "cD", "provider": "t"},
+   "cost": {"total_cost": 10.5, "rows": 1}, "mode": {"winner_forbidden": true}}
+]}')::jsonb AS j;
+CREATE TEMP VIEW gr_rb_ev AS
+SELECT (e->>'seq')::int AS seq, e->>'kind' AS kind, e->>'rel' AS rel,
+       e->>'label' AS label, (e->>'path_id')::int AS path_id,
+       (e->>'dominator_path_id')::int AS dominator_path_id
+FROM gr_rb, jsonb_array_elements(j->'events') e;
+SELECT seq, label, kind,
+       (SELECT label FROM gr_rb_ev a WHERE a.path_id = r.dominator_path_id
+          AND a.kind = 'accepted' LIMIT 1) AS dominator_label
+FROM gr_rb_ev r WHERE kind = 'rejected' AND label IS NOT NULL ORDER BY seq;
+ seq | label |   kind   | dominator_label 
+-----+-------+----------+-----------------
+   7 | cN    | rejected | cB
+   8 | cD    | rejected | cB
+(2 rows)
+
+SELECT
+  -- cA left the pathlist with cN, but no event says so (cN never entered it)
+  (SELECT count(*) FROM gr_rb_ev WHERE label = 'cA' AND kind = 'displaced')
+    AS ca_displaced_events,
+  (SELECT a.path_id <> d.path_id FROM gr_rb_ev a, gr_rb_ev d
+   WHERE a.label = 'cA' AND a.kind = 'accepted' AND d.label = 'cD' AND d.kind = 'rejected')
+    AS removed_before_reject_ids_not_reused,
+  -- all events of one path_id are of one path
+  (SELECT bool_and(n = 1) FROM (SELECT count(DISTINCT coalesce(label, '')) AS n
+                                FROM gr_rb_ev WHERE path_id IS NOT NULL GROUP BY path_id) x)
+    AS one_label_per_id,
+  (SELECT bool_and(x.path_id BETWEEN 1 AND jsonb_array_length(j->'paths'))
+   FROM gr_rb, (SELECT path_id FROM gr_rb_ev WHERE path_id IS NOT NULL
+                UNION ALL SELECT dominator_path_id FROM gr_rb_ev
+                WHERE dominator_path_id IS NOT NULL) x)
+    AS every_reference_resolves;
+ ca_displaced_events | removed_before_reject_ids_not_reused | one_label_per_id | every_reference_resolves 
+---------------------+--------------------------------------+------------------+--------------------------
+                   0 | t                                    | t                | t
+(1 row)
+
 DROP TABLE gr_o, gr_c;

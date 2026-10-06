@@ -322,6 +322,22 @@ sub mandatory_correctness_cases {
             allowed_fates=>undef, require=>['events'],
             expect_child_lists=>['Append','BitmapOr'],
             dims=>{invariant=>'graph_child_lists'}),
+        # cN removes cA, then cB rejects cN; cD is allocated at cA's address
+        _cc(cid=>'cor_removed_before_reject',
+            query=>'SELECT * FROM ppm.allowed ORDER BY v, id',
+            spec=>'{"candidates":['
+                 .'{"target":{"relname":"allowed"},"candidate":{"pathname":"cA","provider":"m"},'
+                 .'"cost":{"total_cost":10.0,"rows":1},"mode":{"winner_forbidden":true}},'
+                 .'{"target":{"relname":"allowed"},"candidate":{"pathname":"cB","provider":"m"},'
+                 .'"cost":{"total_cost":10.15,"rows":1},"planner":{"pathkeys":["v","id"]},'
+                 .'"mode":{"winner_forbidden":true}},'
+                 .'{"target":{"relname":"allowed"},"candidate":{"pathname":"cN","provider":"m"},'
+                 .'"cost":{"total_cost":10.09,"rows":1},"planner":{"pathkeys":["v"]},'
+                 .'"mode":{"winner_forbidden":true}},'
+                 .'{"target":{"relname":"allowed"},"candidate":{"pathname":"cD","provider":"m"},'
+                 .'"cost":{"total_cost":10.5,"rows":1},"mode":{"winner_forbidden":true}}]}',
+            allowed_fates=>undef, require=>['candidates','events'],
+            dims=>{invariant=>'removed_before_reject'}),
     );
 }
 
@@ -886,6 +902,22 @@ sub check_correctness {
             elsif ($multi) {
                 push @fails, "$n->{pathtype} without child_path_ids";
             }
+        }
+        # all events of one path_id are of one path: same type as its node,
+        # one label (the "kept: ..." annotation stored in label is a known
+        # defect and is ignored)
+        my (%id_label);
+        for my $e (grep { ref $_ eq 'HASH' && defined $_->{path_id} } @ev) {
+            my $n = $node{$e->{path_id}} or next;
+            push @fails, "path_id $e->{path_id}: event type $e->{pathtype} vs node $n->{pathtype}"
+                if ($e->{pathtype} // '') ne ($n->{pathtype} // '');
+            my $l = $e->{label} // '';
+            next if $l =~ /^\s*kept:/;
+            if (exists $id_label{$e->{path_id}}) {
+                push @fails, "path_id $e->{path_id} has events of '$id_label{$e->{path_id}}' and '$l'"
+                    if $id_label{$e->{path_id}} ne $l;
+            }
+            else { $id_label{$e->{path_id}} = $l; }
         }
         for my $t (@{ $c->{expect_child_lists} // [] }) {
             push @fails, "no $t path with child_path_ids"
