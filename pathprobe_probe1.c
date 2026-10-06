@@ -46,6 +46,16 @@ extern double pathprobe_min_gap;
 
 
 /*
+ * The last path the rejected hook saw, with the id and seq of its REJECTED
+ * event (0 if none was recorded).  add_path() calls the removed hook right
+ * after the rejected hook for the same new_path, which by then is no
+ * longer in the id map; the removed hook links to it through this.
+ */
+static const Path *last_rejected = NULL;
+static int	last_rejected_id = 0;
+static int	last_rejected_seq = 0;
+
+/*
  * probe1_rejected_hook
  *
  * Called by add_path() when new_path is dominated.  With
@@ -76,6 +86,10 @@ probe1_rejected_hook(RelOptInfo *rel, Path *new_path, Path *dominated_by)
 
 	if (pathprobe_active_log == NULL)
 		return;
+
+	last_rejected = new_path;
+	last_rejected_id = 0;
+	last_rejected_seq = 0;
 
 	/*
 	 * gap for REJECTED: how much more expensive new_path is vs the winner.
@@ -128,7 +142,9 @@ probe1_rejected_hook(RelOptInfo *rel, Path *new_path, Path *dominated_by)
 											  dominator, rel);
 		ev.link_pathtype = dominator->pathtype;
 	}
-	pelog_append(pathprobe_active_log, &ev);
+	pelog_append(pathprobe_active_log, &ev);	/* sets ev.seq, or 0 if full */
+	last_rejected_id = ev.path_id;
+	last_rejected_seq = ev.seq;
 
 	/* add_path() frees a rejected path unless it is an IndexPath */
 	if (!IsA(new_path, IndexPath))
@@ -237,23 +253,70 @@ probe1_accepted_hook(RelOptInfo *rel, Path *new_path, List *dominated_list)
  *
  * Called by add_path() after the rejected hook, when new_path removed old
  * paths from the pathlist before an old path was found to dominate it.
- * add_path() frees them (except IndexPaths) when this returns.  No event is
- * recorded: their remover never entered the pathlist, so a DISPLACED event
- * would name a displacer that has no ACCEPTED event.  Only the path ids are
- * dropped, so a later path at a recycled address gets a new id.  This runs
- * whether or not acceptance is logged.
+ * Each removed path gets a REMOVED event, not DISPLACED: its remover never
+ * entered the pathlist, so it has a REJECTED event, not an ACCEPTED one.
+ * The event links to the remover and its REJECTED event.  add_path() frees
+ * the removed paths (except IndexPaths) when this returns, so their ids are
+ * dropped.  Recorded whether or not acceptance is logged.
  */
 void
 probe1_removed_hook(RelOptInfo *rel, Path *new_path, List *removed_list)
 {
-	if (pathprobe_active_log == NULL)
+	PathEventLog *log = pathprobe_active_log;
+	int			remover_id = 0;
+	int			remover_seq = 0;
+	bool		remover_registered = false;
+	Relids		relids;
+
+	if (log == NULL)
 		return;
 
+	if (last_rejected == new_path)
+	{
+		remover_id = last_rejected_id;
+		remover_seq = last_rejected_seq;
+	}
+	last_rejected = NULL;
+	if (remover_id == 0)
+	{
+		/* no REJECTED event (min_gap): new_path still gets an id */
+		remover_id = pelog_path_id(log, new_path);
+		remover_registered = true;
+	}
+
+	relids = pelog_intern_relids(log, rel->relids);
 	foreach_ptr(Path, old_path, removed_list)
 	{
+		PathEvent	ev;
+		const char *name = pathprobe_path_label(old_path);
+
+		memset(&ev, 0, sizeof(ev));
+		ev.relids = relids;
+		ev.relid = InvalidOid;
+		ev.pathtype = old_path->pathtype;
+		ev.cost_startup = old_path->startup_cost;
+		ev.cost_total = old_path->total_cost;
+		ev.disabled_nodes = old_path->disabled_nodes;
+		ev.kind = PEK_REMOVED;
+		ev.origin = PATH_ORIGIN_REAL;
+		ev.source = PATH_SOURCE_ADD_PATH;
+		ev.is_parameterized = (old_path->param_info != NULL);
+		ev.other_pathtype = new_path->pathtype;
+		if (name)
+			ev.label = MemoryContextStrdup(log->mcxt, name);
+		ev.path_id = pelog_path_id(log, old_path);
+		ev.link_path_id = remover_id;
+		ev.link_seq = remover_seq;
+		ev.link_pathtype = new_path->pathtype;
+		pelog_append(log, &ev);
+
 		if (!IsA(old_path, IndexPath))
-			pelog_path_forget(pathprobe_active_log, old_path);
+			pelog_path_forget(log, old_path);
 	}
+
+	/* the rejected hook already forgot new_path; undo our registration */
+	if (remover_registered && !IsA(new_path, IndexPath))
+		pelog_path_forget(log, new_path);
 }
 
 /*

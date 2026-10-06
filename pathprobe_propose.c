@@ -1900,6 +1900,7 @@ typedef struct HypoCounts
 	int			rejected;
 	int			survived;
 	int			displaced;
+	int			removed;
 	bool		best_set;
 	Cost		best;
 } HypoCounts;
@@ -1910,7 +1911,10 @@ typedef enum HypoFate
 	HYPO_NOT_EXAMINED,			/* build_index_paths() never called for it */
 	HYPO_NOT_GENERATED,			/* called, no path built */
 	HYPO_REJECTED,				/* every observed add_path() rejected it */
-	HYPO_DISPLACED,				/* accepted, all accepted paths displaced */
+	HYPO_DISPLACED,				/* accepted, all accepted paths displaced or
+								 * removed, some displaced */
+	HYPO_REMOVED,				/* accepted, all accepted paths removed by
+								 * paths add_path() then rejected */
 	HYPO_SURVIVED_AT_POINT,		/* in the pathlist after injection;
 								 * acceptance/displacement not covered */
 	HYPO_SURVIVED,				/* accepted paths not all displaced */
@@ -1948,6 +1952,8 @@ hypo_count_events(PathEventLog *log, HypoIndexSpec * h, HypoCounts * c,
 			c->survived++;
 		else if (ev->kind == PEK_DISPLACED)
 			c->displaced++;
+		else if (ev->kind == PEK_REMOVED)
+			c->removed++;
 		if (!c->best_set || ev->cost_total < c->best)
 		{
 			c->best = ev->cost_total;
@@ -1964,13 +1970,14 @@ hypo_count_events(PathEventLog *log, HypoIndexSpec * h, HypoCounts * c,
 static HypoFate
 hypo_fate(PathEventLog *log, HypoIndexSpec * h, const char **reason)
 {
-	uint32		acc_disp = PP_COV_ACCEPTED | PP_COV_DISPLACED;
+	uint32		acc_disp = PP_COV_ACCEPTED | PP_COV_DISPLACED | PP_COV_REMOVED;
 	HypoCounts	base;
 	HypoCounts *c = &base;
 	bool		observed;
 
 	hypo_count_events(log, h, c, true);
-	observed = (c->accepted + c->rejected + c->survived + c->displaced) > 0;
+	observed = (c->accepted + c->rejected + c->survived + c->displaced +
+				c->removed) > 0;
 	*reason = NULL;
 	if (!h->injected)
 	{
@@ -2006,13 +2013,13 @@ hypo_fate(PathEventLog *log, HypoIndexSpec * h, const char **reason)
 	/* paths were generated; what happened to them in add_path() */
 	if ((log->coverage & acc_disp) == acc_disp)
 	{
-		if (c->displaced > c->accepted ||
+		if (c->displaced + c->removed > c->accepted ||
 			(c->survived > 0 && c->accepted == 0))
 			return HYPO_ILLEGAL;
-		if (c->accepted > c->displaced)
+		if (c->accepted > c->displaced + c->removed)
 			return HYPO_SURVIVED;
 		if (c->accepted > 0)
-			return HYPO_DISPLACED;
+			return c->displaced > 0 ? HYPO_DISPLACED : HYPO_REMOVED;
 		if (c->rejected > 0)
 			return HYPO_REJECTED;
 	}
@@ -2039,6 +2046,8 @@ hypo_fate_text(HypoFate f)
 			return "rejected";
 		case HYPO_DISPLACED:
 			return "displaced";
+		case HYPO_REMOVED:
+			return "removed";
 		case HYPO_SURVIVED_AT_POINT:
 			return "survived_at_point";
 		case HYPO_SURVIVED:
@@ -2239,7 +2248,9 @@ pathprobe_propose(PG_FUNCTION_ARGS)
  *
  * At the target rel the candidate is rejected, or accepted; once accepted
  * it is either seen in the pathlist right after its own add_path()
- * (SURVIVED, which implies acceptance) and possibly displaced later.  An
+ * (SURVIVED, which implies acceptance) and possibly displaced later, or
+ * removed by a path that add_path() then rejected (REMOVED).  Both end its
+ * time in the pathlist, so they override an earlier SURVIVED.  An
  * acceptance into an upper rel means the candidate path itself was carried
  * up; rejection or displacement in an upper rel does not undo that.
  * Sequences that contradict a covered decision point are reported as
@@ -2256,6 +2267,7 @@ typedef enum CandFate
 	CAND_SURVIVED_AT_POINT,		/* survived, displacement not covered */
 	CAND_SURVIVED,				/* survived, no displacement observed */
 	CAND_DISPLACED,
+	CAND_REMOVED,				/* removed by a path that was then rejected */
 	CAND_UPPER,					/* accepted into an upper rel */
 	CAND_ILLEGAL
 }			CandFate;
@@ -2269,6 +2281,7 @@ propose_candidate_fate(PathEventLog *log, ProposedPathSpec * spec,
 				rejected = false,
 				survived = false,
 				displaced = false,
+				removed = false,
 				upper = false;
 	int			i;
 
@@ -2290,7 +2303,7 @@ propose_candidate_fate(PathEventLog *log, ProposedPathSpec * spec,
 		{
 			if (ev->kind == PEK_ACCEPTED)
 			{
-				ok = (accepted || survived) && !displaced;
+				ok = (accepted || survived) && !displaced && !removed;
 				upper = true;
 			}
 		}
@@ -2299,20 +2312,26 @@ propose_candidate_fate(PathEventLog *log, ProposedPathSpec * spec,
 			switch (ev->kind)
 			{
 				case PEK_REJECTED:
-					ok = !(accepted || survived || displaced);
+					ok = !(accepted || survived || displaced || removed);
 					rejected = true;
 					break;
 				case PEK_ACCEPTED:
-					ok = !(rejected || displaced);
+					ok = !(rejected || displaced || removed);
 					accepted = true;
 					break;
 				case PEK_SURVIVED:
-					ok = !(rejected || displaced) && (accepted || !acc_covered);
+					ok = !(rejected || displaced || removed) &&
+						(accepted || !acc_covered);
 					survived = true;
 					break;
 				case PEK_DISPLACED:
-					ok = !rejected && (accepted || !acc_covered);
+					ok = !(rejected || removed) && (accepted || !acc_covered);
 					displaced = true;
+					break;
+				case PEK_REMOVED:
+					ok = !(rejected || displaced || removed) &&
+						(accepted || !acc_covered);
+					removed = true;
 					break;
 				default:
 					ok = false;
@@ -2332,8 +2351,11 @@ propose_candidate_fate(PathEventLog *log, ProposedPathSpec * spec,
 		return CAND_REJECTED;
 	if (displaced)
 		return CAND_DISPLACED;
+	if (removed)
+		return CAND_REMOVED;
 	if (survived)
-		return (log->coverage & PP_COV_DISPLACED) ? CAND_SURVIVED :
+		return ((log->coverage & (PP_COV_DISPLACED | PP_COV_REMOVED)) ==
+				(PP_COV_DISPLACED | PP_COV_REMOVED)) ? CAND_SURVIVED :
 			CAND_SURVIVED_AT_POINT;
 	if (accepted)
 		return CAND_UNKNOWN_AFTER_ACCEPT;
@@ -2363,6 +2385,9 @@ cand_fate_text(CandFate f, bool json_form)
 			return "survived";
 		case CAND_DISPLACED:
 			return json_form ? "displaced" : "accepted -> displaced";
+		case CAND_REMOVED:
+			return json_form ? "removed" :
+				"accepted -> removed (by a path that was then rejected)";
 		case CAND_UPPER:
 			return json_form ? "survived_upper" : "survived (reached upper rel)";
 		case CAND_ILLEGAL:
@@ -2592,7 +2617,8 @@ propose_candidate_json(StringInfo out, PathEventLog *log,
 	int			n_acc = 0,
 				n_rej = 0,
 				n_surv = 0,
-				n_disp = 0;
+				n_disp = 0,
+				n_rem = 0;
 	const char *fate;
 
 	for (i = 0; i < log->nevents; i++)
@@ -2615,6 +2641,8 @@ propose_candidate_json(StringInfo out, PathEventLog *log,
 				n_surv++;
 			else if (ev->kind == PEK_DISPLACED)
 				n_disp++;
+			else if (ev->kind == PEK_REMOVED)
+				n_rem++;
 		}
 		else if (ev->kind == PEK_SURVIVED &&
 				 ev->source == PATH_SOURCE_REL_HOOK &&
@@ -2660,8 +2688,8 @@ propose_candidate_json(StringInfo out, PathEventLog *log,
 		appendStringInfo(out, ",\"gap\":%.2f", wp_best_cost - winner_cost);
 	appendStringInfo(out,
 					 ",\"event_counts\":{\"accepted\":%d,\"rejected\":%d,"
-					 "\"survived\":%d,\"displaced\":%d}",
-					 n_acc, n_rej, n_surv, n_disp);
+					 "\"survived\":%d,\"displaced\":%d,\"removed\":%d}",
+					 n_acc, n_rej, n_surv, n_disp, n_rem);
 	appendStringInfoChar(out, '}');
 }
 
@@ -2887,9 +2915,9 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 								 h->in_plan ? "true" : "false");
 				appendStringInfo(&out,
 								 ",\"accepted\":%d,\"rejected\":%d,\"survived\":%d"
-								 ",\"displaced\":%d",
+								 ",\"displaced\":%d,\"removed\":%d",
 								 hc.accepted, hc.rejected, hc.survived,
-								 hc.displaced);
+								 hc.displaced, hc.removed);
 				if (hc.best_set)
 					appendStringInfo(&out, ",\"best_cost\":%.2f", hc.best);
 				appendStringInfo(&out, ",\"fate\":\"%s\"", hypo_fate_text(hf));

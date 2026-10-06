@@ -267,6 +267,9 @@ pathprobe_coverage(void)
 		cov |= PP_COV_REJECTED;
 	if (pathprobe_log_accepted)
 		cov |= PP_COV_ACCEPTED | PP_COV_DISPLACED;
+#ifdef HAVE_PATHPROBE_REMOVED_HOOK
+	cov |= PP_COV_REMOVED;
+#endif
 #endif
 	if (pathprobe_enable_probe2)
 		cov |= PP_COV_EXCLUDED;
@@ -983,6 +986,7 @@ pelog_build_summary(PathEventLog *log, MemoryContext mcxt)
 				ent->n_accepted++;
 				break;
 			case PEK_DISPLACED:
+			case PEK_REMOVED:
 				break;
 			case PEK_SURVIVED:
 				ent->n_survived++;
@@ -1059,6 +1063,9 @@ render_text(PathProbeReport *report, StringInfo out, PathProbeOpts *opts)
 				break;
 			case PEK_DISPLACED:
 				kind_str = "displaced";
+				break;
+			case PEK_REMOVED:
+				kind_str = "removed";
 				break;
 			case PEK_SURVIVED:
 				kind_str = "survived";
@@ -1369,6 +1376,9 @@ pathprobe_emit_structured(PathEventLog *log, ExplainState *es)
 				break;
 			case PEK_DISPLACED:
 				kind_str = "displaced";
+				break;
+			case PEK_REMOVED:
+				kind_str = "removed";
 				break;
 			case PEK_SURVIVED:
 			default:

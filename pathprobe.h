@@ -41,6 +41,8 @@ typedef enum PathEventKind
 								 * view)   */
 	PEK_EXCLUDED,				/* join strategy excluded by pgs_mask before
 								 * generation */
+	PEK_REMOVED,				/* existing path removed by a new path that
+								 * add_path() then rejected */
 } PathEventKind;
 
 /* ----------
@@ -140,8 +142,10 @@ typedef struct PathEvent
 	 * Path identity within this log (see pelog_path_id); 0 when the event
 	 * has no Path (SKIPPED, EXCLUDED).  link_* names the other path of the
 	 * add_path() decision: for DISPLACED the path that displaced this one,
-	 * for REJECTED the old path that dominated it.  link_seq is the seq of
-	 * that path's ACCEPTED event into the same rel (0 if not recorded).
+	 * for REJECTED the old path that dominated it, for REMOVED the new path
+	 * that removed this one and was then rejected.  link_seq is the seq of
+	 * that path's ACCEPTED event into the same rel, for REMOVED of its
+	 * REJECTED event (0 if not recorded).
 	 * Unlike other_pathtype, link_* never comes from a proxy.
 	 */
 	int			path_id;
@@ -231,6 +235,8 @@ typedef struct PathEventLog
 #define PP_COV_EXCLUDED		0x20	/* join methods excluded at join setup */
 #define PP_COV_INDEX_BUILD	0x40	/* build_index_paths() decision for
 									 * hypothetical indexes (propose) */
+#define PP_COV_REMOVED		0x80	/* add_path() removal by a path it then
+									 * rejects (core patch) */
 
 extern uint32 pathprobe_coverage(void);
 

@@ -115,6 +115,9 @@ render_json(PathProbeReport *report, StringInfo out, PathProbeOpts *opts,
 			case PEK_DISPLACED:
 				kind_str = "displaced";
 				break;
+			case PEK_REMOVED:
+				kind_str = "removed";
+				break;
 			case PEK_SURVIVED:
 				kind_str = "survived";
 				break;
@@ -200,6 +203,21 @@ render_json(PathProbeReport *report, StringInfo out, PathProbeOpts *opts,
 			else
 				appendStringInfoString(out, ",\"dominator_seq\":null");
 		}
+		else if (ev->kind == PEK_REMOVED)
+		{
+			/* the new path that removed this one; add_path() rejected it */
+			if (ev->link_path_id > 0)
+				appendStringInfo(out, ",\"remover_path_id\":%d",
+								 ev->link_path_id);
+			else
+				appendStringInfoString(out, ",\"remover_path_id\":null");
+			if (ev->link_seq > 0)
+				appendStringInfo(out, ",\"remover_seq\":%d", ev->link_seq);
+			else
+				appendStringInfoString(out, ",\"remover_seq\":null");
+			appendStringInfoString(out, ",\"remover_pathtype\":");
+			json_str(out, pathtype_name(ev->link_pathtype));
+		}
 		if (ev->label)
 		{
 			appendStringInfoString(out, ",\"label\":");
@@ -280,10 +298,12 @@ render_json(PathProbeReport *report, StringInfo out, PathProbeOpts *opts,
 	appendStringInfo(out,
 					 "  \"coverage\": {\"survived_snapshot\":%s,"
 					 "\"add_path_accepted\":%s,\"add_path_rejected\":%s,"
-					 "\"add_path_displaced\":%s,\"add_path_precheck\":%s,"
+					 "\"add_path_displaced\":%s,\"add_path_removed\":%s,"
+					 "\"add_path_precheck\":%s,"
 					 "\"join_excluded\":%s,\"index_build\":%s},\n",
 					 COV(PP_COV_SURVIVED), COV(PP_COV_ACCEPTED),
 					 COV(PP_COV_REJECTED), COV(PP_COV_DISPLACED),
+					 COV(PP_COV_REMOVED),
 					 COV(PP_COV_PRECHECK), COV(PP_COV_EXCLUDED),
 					 COV(PP_COV_INDEX_BUILD));
 #undef COV
