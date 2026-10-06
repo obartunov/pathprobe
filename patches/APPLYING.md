@@ -23,4 +23,6 @@ HAVE_PATHPROBE_INDEX_PATH_HOOK, so a server built with an older copy of the
 patch still works, without index-build coverage.  Likewise
 HAVE_PATHPROBE_REJECTED_DOMINATOR says that the rejected hook gets the old
 path that dominated the new one, not the rel's cheapest total path; without
-it REJECTED events carry no dominator.
+it REJECTED events carry no dominator.  HAVE_PATHPROBE_REMOVED_HOOK says that
+add_path() reports the old paths it removed before rejecting the new path;
+without it pathprobe cannot drop their path ids (see json-format.md).

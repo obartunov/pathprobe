@@ -216,10 +216,10 @@ index 713283a..f68c6d3 100644
  }
  
 diff --git a/src/backend/optimizer/util/pathnode.c b/src/backend/optimizer/util/pathnode.c
-index 67c47fd..3976181 100644
+index 67c47fd..845795c 100644
 --- a/src/backend/optimizer/util/pathnode.c
 +++ b/src/backend/optimizer/util/pathnode.c
-@@ -55,6 +55,32 @@ static bool pathlist_is_reparameterizable_by_child(List *pathlist,
+@@ -55,6 +55,35 @@ static bool pathlist_is_reparameterizable_by_child(List *pathlist,
  												   RelOptInfo *child_rel);
  
  
@@ -231,6 +231,8 @@ index 67c47fd..3976181 100644
 + *   old path that dominated it. new_path pfree'd after hook returns.
 + * pathprobe_path_accepted_hook: new_path survived; dominated_list may be NIL.
 + *   Paths in dominated_list are freed only after the hook returns.
++ * pathprobe_path_removed_hook: new_path was rejected after it had removed
++ *   removed_list from the pathlist; those are freed after the hook returns.
 + */
 +typedef void (*pathprobe_path_rejected_hook_type)(RelOptInfo *rel,
 +												  Path *new_path,
@@ -241,6 +243,7 @@ index 67c47fd..3976181 100644
 +
 +PGDLLIMPORT pathprobe_path_rejected_hook_type pathprobe_path_rejected_hook = NULL;
 +PGDLLIMPORT pathprobe_path_accepted_hook_type pathprobe_path_accepted_hook = NULL;
++PGDLLIMPORT pathprobe_path_removed_hook_type pathprobe_path_removed_hook = NULL;
 +
 +/*
 + * pathprobe_path_skipped_hook — defined here (pathnode.c), called from joinpath.c.
@@ -252,7 +255,7 @@ index 67c47fd..3976181 100644
  /*****************************************************************************
   *		MISC. PATH UTILITIES
   *****************************************************************************/
-@@ -460,6 +486,8 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
+@@ -460,6 +489,8 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
  {
  	bool		accept_new = true;	/* unless we find a superior old path */
  	int			insert_at = 0;	/* where to insert new item */
@@ -261,18 +264,18 @@ index 67c47fd..3976181 100644
  	List	   *new_path_pathkeys;
  	ListCell   *p1;
  
-@@ -627,7 +655,9 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
+@@ -627,7 +658,9 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
  			/*
  			 * Delete the data pointed-to by the deleted cell, if possible
  			 */
 -			if (!IsA(old_path, IndexPath))
-+			if (pathprobe_path_accepted_hook)
++			if (pathprobe_path_accepted_hook || pathprobe_path_removed_hook)
 +				dominated_paths = lappend(dominated_paths, old_path);
 +			else if (!IsA(old_path, IndexPath))
  				pfree(old_path);
  		}
  		else
-@@ -648,21 +678,45 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
+@@ -648,21 +681,52 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
  		 * new_path cannot dominate any other elements of the pathlist.
  		 */
  		if (!accept_new)
@@ -299,15 +302,22 @@ index 67c47fd..3976181 100644
 +		 */
 +		if (pathprobe_path_rejected_hook)
 +			pathprobe_path_rejected_hook(parent_rel, new_path, dominated_by);
++
++		/*
++		 * The loop may have removed old paths before it found dominated_by.
++		 * They are gone from the pathlist and freed below.
++		 */
++		if (pathprobe_path_removed_hook && dominated_paths != NIL)
++			pathprobe_path_removed_hook(parent_rel, new_path, dominated_paths);
  		/* Reject and recycle the new path */
  		if (!IsA(new_path, IndexPath))
  			pfree(new_path);
  	}
 +
 +	/*
-+	 * Free the old paths the loop removed but kept for the accepted hook.
-+	 * This is needed on the reject path too: the loop may remove old paths
-+	 * before it finds one that dominates new_path.
++	 * Free the old paths the loop removed but kept for the hooks.  This is
++	 * needed on the reject path too: the loop may remove old paths before it
++	 * finds one that dominates new_path.
 +	 */
 +	foreach_ptr(Path, dpath, dominated_paths)
 +	{
@@ -319,10 +329,10 @@ index 67c47fd..3976181 100644
  
  /*
 diff --git a/src/include/optimizer/pathnode.h b/src/include/optimizer/pathnode.h
-index da2d9b3..6b74586 100644
+index da2d9b3..ca0f0db 100644
 --- a/src/include/optimizer/pathnode.h
 +++ b/src/include/optimizer/pathnode.h
-@@ -17,6 +17,47 @@
+@@ -17,6 +17,59 @@
  #include "nodes/bitmapset.h"
  #include "nodes/pathnodes.h"
  
@@ -337,6 +347,11 @@ index da2d9b3..6b74586 100644
 + *
 + * pathprobe_path_accepted_hook: called when new_path survives.
 + *   dominated_list: paths displaced by new_path (may be NIL).
++ *
++ * pathprobe_path_removed_hook: called after the rejected hook when new_path
++ *   had removed old paths from the pathlist before an old path was found to
++ *   dominate it.  removed_list is never NIL; its paths (and new_path) are
++ *   freed after the hook returns, IndexPaths excepted.
 + */
 +typedef void (*pathprobe_path_rejected_hook_type)(RelOptInfo *rel,
 +												  Path *new_path,
@@ -346,10 +361,17 @@ index da2d9b3..6b74586 100644
 +												  List *dominated_list);
 +
 +extern PGDLLIMPORT pathprobe_path_rejected_hook_type pathprobe_path_rejected_hook;
++typedef void (*pathprobe_path_removed_hook_type)(RelOptInfo *rel,
++												 Path *new_path,
++												 List *removed_list);
 +extern PGDLLIMPORT pathprobe_path_accepted_hook_type pathprobe_path_accepted_hook;
++extern PGDLLIMPORT pathprobe_path_removed_hook_type pathprobe_path_removed_hook;
 +
 +/* dominated_by is the actual dominating path, not a proxy */
 +#define HAVE_PATHPROBE_REJECTED_DOMINATOR 1
++
++/* pathprobe_path_removed_hook exists */
++#define HAVE_PATHPROBE_REMOVED_HOOK 1
 +
 +/*
 + * Called when add_path_precheck() rejects a join path before construction.
