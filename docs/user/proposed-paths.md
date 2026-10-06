@@ -39,6 +39,22 @@ planner.parallel_safe default true; add_path() never rejects a parallel-safe
 mode.winner_forbidden prevent diagnostic candidate from becoming executable winner
 ```
 
+## Text card
+
+`pathprobe_propose()` returns one card per candidate.  Besides the fate it
+shows:
+
+```text
+cheapest  the cheapest real path of the target relation in the pathlist
+          snapshot taken before the candidate was injected; not the plan's
+          winner (CONTEXT repeats it as "pre-injection cheapest")
+gap       the candidate's best cost minus that cost
+note      "candidate won" only for the fates survived and survived_upper
+```
+
+The JSON fields `winner_strategy` and `winner_cost` carry the same
+pre-injection value.
+
 ## Candidate fate
 
 `pathprobe_propose_json()` returns `candidates[]`.  Each candidate gets a finite

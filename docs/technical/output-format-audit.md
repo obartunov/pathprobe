@@ -47,8 +47,10 @@ but not displacement counts or the build decision.
 - Confusing: `event_counts.survived = 1` next to `fate = displaced` (the
   frontier snapshot after injection is counted).  `survived_upper` vs
   `survived` needs the docs.
-- Text card: `winner` is the cheapest real path in the relation's snapshot
-  taken before injection, not the plan winner.  The `note: candidate won --
+- Text card: the line that said `winner` showed the cheapest real path in
+  the relation's snapshot taken before injection, not the plan winner; it
+  now reads `cheapest : ... (before injection)` and, under CONTEXT,
+  `pre-injection cheapest`.  The `note: candidate won --
   execution will fail` line used to follow any SURVIVED event of the
   candidate, so the displaced `early` was reported as having won; it now
   follows the final fate (`survived` or `survived_upper` only).
@@ -172,8 +174,7 @@ D  hypothetical index events with origin "proposed"       docs-only             
 E  index_build.generated counts calls                     docs-only             documented
 F  counts include upper-rel events, fate does not         docs-only             documented
 G  advisor skipped clauses not reported                   JSON additive field   later
-H  text card "winner" and "note" lines                    text-output only      note fixed; winner
-                                                                                follow-up
+H  text card "winner" and "note" lines                    text-output only      fixed
 ```
 
 ## Proposed follow-ups
