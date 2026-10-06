@@ -315,6 +315,35 @@ SELECT
                    0 | removed       | t                                    | t                | t                        | true
 (1 row)
 
+-- 8b. pathprobe.min_gap drops REJECTED events (their gap is 0 while the
+-- rel is populated), but not REMOVED ones: cA still gets its event, with a
+-- null remover_seq and a remover_path_id that resolves to a node of type
+-- remover_pathtype
+SET pathprobe.min_gap = 1;
+WITH j AS (SELECT pathprobe_propose_json('SELECT * FROM gr_c ORDER BY region, id', '{"candidates": [
+  {"target": {"relname": "gr_c"}, "candidate": {"pathname": "cA", "provider": "t"},
+   "cost": {"total_cost": 10.0, "rows": 1}, "mode": {"winner_forbidden": true}},
+  {"target": {"relname": "gr_c"}, "candidate": {"pathname": "cB", "provider": "t"},
+   "cost": {"total_cost": 10.15, "rows": 1}, "planner": {"pathkeys": ["region", "id"]},
+   "mode": {"winner_forbidden": true}},
+  {"target": {"relname": "gr_c"}, "candidate": {"pathname": "cN", "provider": "t"},
+   "cost": {"total_cost": 10.09, "rows": 1}, "planner": {"pathkeys": ["region"]},
+   "mode": {"winner_forbidden": true}}]}')::jsonb AS j),
+     e AS (SELECT e FROM j, jsonb_array_elements(j->'events') e)
+SELECT (SELECT count(*) FROM e WHERE e->>'kind' = 'rejected') AS rejected_events,
+       m->>'label' AS label, m->'remover_seq' AS remover_seq,
+       (SELECT p->>'pathtype' FROM j, jsonb_array_elements(j->'paths') p
+        WHERE p->'path_id' = m->'remover_path_id') = m->>'remover_pathtype'
+         AS remover_resolves,
+       (SELECT c->>'fate' FROM j, jsonb_array_elements(j->'candidates') c
+        WHERE c->>'pathname' = 'cA') AS ca_fate
+FROM e AS x(m) WHERE m->>'kind' = 'removed';
+ rejected_events | label | remover_seq | remover_resolves | ca_fate 
+-----------------+-------+-------------+------------------+---------
+               0 | cA    | null        | t                | removed
+(1 row)
+
+RESET pathprobe.min_gap;
 -- 9. path properties: rows on every node except BitmapAnd / BitmapOr (the
 -- planner leaves them at 0, "not used"), required_outer of a parameterized
 -- path, the index of an index path, startup cost on every event
