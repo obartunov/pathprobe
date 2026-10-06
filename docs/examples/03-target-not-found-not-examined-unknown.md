@@ -35,18 +35,18 @@ candidate on it lost or never had a chance.
 
 ```text
  n |    target     |       fate       | injected | event_counts
----+---------------+------------------+----------+---------------------------------------------------------------
- 1 | nosuchtable   | target_not_found | false    | {"accepted": 0, "rejected": 0, "survived": 0, "displaced": 0}
- 2 | ex3_customers | not_examined     | false    | {"accepted": 0, "rejected": 0, "survived": 0, "displaced": 0}
- 3 | ex3_orders    | rejected         | true     | {"accepted": 0, "rejected": 1, "survived": 0, "displaced": 0}
+---+---------------+------------------+----------+-----------------------------------------------------------------------------
+ 1 | nosuchtable   | target_not_found | false    | {"removed": 0, "accepted": 0, "rejected": 0, "survived": 0, "displaced": 0}
+ 2 | ex3_customers | not_examined     | false    | {"removed": 0, "accepted": 0, "rejected": 0, "survived": 0, "displaced": 0}
+ 3 | ex3_orders    | rejected         | true     | {"removed": 0, "accepted": 0, "rejected": 1, "survived": 0, "displaced": 0}
 ```
 
 Case 3 again, with `pathprobe.min_gap = 1000000`:
 
 ```text
  rejection_covered |  fate   | event_counts
--------------------+---------+---------------------------------------------------------------
- false             | unknown | {"accepted": 0, "rejected": 0, "survived": 0, "displaced": 0}
+-------------------+---------+-----------------------------------------------------------------------------
+ false             | unknown | {"removed": 0, "accepted": 0, "rejected": 0, "survived": 0, "displaced": 0}
 ```
 
 ## Explanation

@@ -12,6 +12,9 @@ rejected  a Path was built, entered add_path(), and lost
 accepted  a Path entered the frontier
 survived  a Path is still present in the observed frontier
 displaced a previously accepted Path was pushed out by a later competitor
+          that add_path() accepted
+removed   a previously accepted Path was pushed out by a later competitor
+          that add_path() then rejected
 ```
 
 These are not synonyms.  They name different stages of path elimination.
@@ -57,7 +60,11 @@ it, "no accepted event" says nothing.  See
 In JSON every event that concerns a Path has a `path_id`; the same path keeps
 it across its events (accepted, survived in a snapshot, displaced).  A
 DISPLACED event names its displacer (`displacer_path_id`, `displacer_seq`,
-`other_pathtype`).  A REJECTED event names the path that dominated it
+`other_pathtype`).  A REMOVED event marks a path that a new path pushed out
+of the pathlist although `add_path()` then rejected that new path; it names
+the remover (`remover_path_id`, `remover_seq`, `remover_pathtype`) and, like
+DISPLACED, ends the path's life in that rel: a candidate with it has the
+fate `removed`, not `survived`.  A REJECTED event names the path that dominated it
 (`dominator_path_id`, `dominator_seq`, `dominator_pathtype`): the first path
 in the pathlist that `add_path()` found to be at least as good on cost,
 ordering, parameterization, rows and parallel safety.  The top-level

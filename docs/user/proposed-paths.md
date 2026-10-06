@@ -49,7 +49,10 @@ target_not_found         no relation with the target name in the query
 not_examined             target in the query, never reached the injection point
 rejected                 built and rejected by add_path()
 displaced                entered the pathlist, later pushed out by a better path
-survived                 in the pathlist after its add_path(), not displaced
+removed                  entered the pathlist, later pushed out by a path that
+                         add_path() then rejected
+survived                 in the pathlist after its add_path(), neither
+                         displaced nor removed
 survived_at_point        in the pathlist after its add_path(); displacement
                          not observable in this run
 survived_upper           the candidate path reached an upper relation

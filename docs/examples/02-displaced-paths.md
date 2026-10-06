@@ -41,9 +41,9 @@ Two proposed candidates on one relation, the cheaper one injected second:
 
 ```text
  candidate |      fate      | event_counts
------------+----------------+---------------------------------------------------------------
- early     | displaced      | {"accepted": 1, "rejected": 0, "survived": 1, "displaced": 1}
- late      | survived_upper | {"accepted": 2, "rejected": 0, "survived": 1, "displaced": 0}
+-----------+----------------+-----------------------------------------------------------------------------
+ early     | displaced      | {"removed": 0, "accepted": 1, "rejected": 0, "survived": 1, "displaced": 1}
+ late      | survived_upper | {"removed": 0, "accepted": 2, "rejected": 0, "survived": 1, "displaced": 0}
 ```
 
 ## Explanation

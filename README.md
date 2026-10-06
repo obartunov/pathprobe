@@ -49,7 +49,8 @@ hypo/advisor  same functions: hypothetical indexes (hypo_indexes, hypo_sql)
 ```
 
 Event kinds: `excluded`, `skipped`, `rejected`, `accepted`, `displaced`,
-`survived`.  Every event has a sequence number, the relation, the path type
+`removed`, `survived`.  `displaced` means pushed out of the pathlist by a
+path `add_path()` accepted, `removed` by one it then rejected.  Every event has a sequence number, the relation, the path type
 and, for proposed and hypothetical paths, a label.  In JSON each path has a
 `path_id`, DISPLACED events name their displacer, REJECTED events their
 dominator, and `paths[]` gives the child edges of join, wrapper and
@@ -126,7 +127,7 @@ relation.  Each candidate gets a fate:
 
 ```text
 target_not_found  not_examined  unknown  rejected  unknown_after_accept
-survived_at_point  survived  displaced  survived_upper  (inconsistent)
+survived_at_point  survived  displaced  removed  survived_upper  (inconsistent)
 ```
 
 `target_not_found` is a spec error (no such relation in the query);
@@ -249,9 +250,7 @@ docs/testing/                     model-based tests, generator, test matrix
 - When `apply_scanjoin_target_to_paths()` rebuilds a pathlist, the paths it
   drops produce no DISPLACED event.
 - `path_id` may conflate join paths under GEQO, and any paths without the
-  core patch.  Old paths that `add_path()` removes before rejecting the new
-  path get no event (their ids are dropped); their last event is still
-  ACCEPTED or SURVIVED.
+  core patch.
 - The advisor is a local candidate generator with known defects (OR
   clauses, duplicate expression indexes, hypothetical btree costing); see
   [advisor audit](docs/technical/advisor-audit.md).

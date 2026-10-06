@@ -65,6 +65,17 @@ A REJECTED event names the old path that made it lose:
 }
 ```
 
+A REMOVED event names the path that removed it, which `add_path()` then
+rejected (see "Removed before a rejection" below):
+
+```json
+{
+  "seq": 8, "src": "wp", "rel": "{1}", "pathtype": "CustomScan",
+  "kind": "removed", "label": "cA", "path_id": 2,
+  "remover_path_id": 4, "remover_seq": 7, "remover_pathtype": "CustomScan"
+}
+```
+
 Rules:
 
 ```text
@@ -80,7 +91,34 @@ dominator_seq is null if the dominator's ACCEPTED event into this rel was
   into the pathlist without add_path())
 dominator_path_id and dominator_pathtype are null only with a server built
   from an older copy of the core patch (see below)
+remover_seq is null if the remover's REJECTED event was not recorded
+  (pathprobe.min_gap, event cap); remover_path_id still resolves
 ```
+
+### Removed before a rejection
+
+`add_path()` compares the new path with every old path in turn.  It can
+remove old paths that the new path dominates and then reach a later old
+path that dominates the new one (the fuzzy cost comparison is not
+transitive): the new path is rejected, and the old paths it removed are
+gone from the pathlist too.  Each of those gets a `removed` event, right
+after the remover's `rejected` event:
+
+```text
+displaced  removed by a new path that add_path() accepted;
+           displacer_seq is that path's ACCEPTED event
+removed    removed by a new path that add_path() then rejected;
+           remover_seq is that path's REJECTED event
+```
+
+Both end the path's time in the pathlist: no later event of that path in
+that rel follows, and an earlier SURVIVED snapshot does not make it a
+survivor.  `removed` is recorded whether or not acceptance is logged.  The
+core regression suite produces no such removal; injected candidates with
+close costs do (test `pathprobe_graph`, section 8).  It needs a server
+built with the current core patch, which defines
+`HAVE_PATHPROBE_REMOVED_HOOK`; `coverage.add_path_removed` says whether the
+point is observed.
 
 `dominator_path_id` is exact.  `add_path()` compares the new path with the
 paths in the pathlist in order (by disabled nodes, then total cost) and
@@ -163,21 +201,11 @@ Limits: with GEQO the planner frees join paths by resetting memory without
 parent-rel check guards against most cases); without the core hooks patch
 pathprobe does not see any free, so the same holds for every path.
 `paths[]` is in the JSON only; the text output and the `EXPLAIN`
-integration do not show ids.
-
-`add_path()` can remove old paths that the new path dominates and then find
-a later old path that dominates the new one (fuzzy cost comparison is not
-transitive).  The new path is rejected, and the removed paths are freed
-too.  The core patch reports them to pathprobe
-(`HAVE_PATHPROBE_REMOVED_HOOK`), which drops their ids, so a later path at
-a recycled address gets a new id.  This is registry bookkeeping only: no
-event is emitted, because the remover never entered the pathlist and a
-DISPLACED event would name a displacer with no ACCEPTED event.  Such a
-removed path's last event is therefore its ACCEPTED (or SURVIVED) event,
-although it is no longer in the pathlist; a proposed candidate removed this
-way keeps the fate `survived`.  With an older copy of the core
-patch these ids are not dropped and may be reused.  The core regression
-suite produces no such removal; injected candidates with close costs do.
+integration do not show ids.  Paths removed before a rejection (above) are
+freed after their `removed` event, and their ids are dropped like those of
+displaced paths.  With an older copy of the core patch there is no such
+event, their ids are not dropped and may be reused, and
+`coverage.add_path_removed` is false.
 
 The exact dominator needs a server built with the current core patch; it
 defines `HAVE_PATHPROBE_REJECTED_DOMINATOR`.  An older copy of the patch
@@ -203,7 +231,8 @@ not report that as a dominator, and the dominator fields are null.
     "accepted": 1,
     "rejected": 0,
     "survived": 1,
-    "displaced": 1
+    "displaced": 1,
+    "removed": 0
   }
 }
 ```
@@ -244,6 +273,7 @@ advisor candidate set improved this query's final plan cost.
   "rejected": 1,
   "survived": 1,
   "displaced": 0,
+  "removed": 0,
   "best_cost": 4.05,
   "fate": "survived",
   "index_build": {
@@ -292,6 +322,7 @@ If any truncation flag is true, an agent should not make a green decision.
   "add_path_accepted": true,
   "add_path_rejected": true,
   "add_path_displaced": true,
+  "add_path_removed": true,
   "add_path_precheck": true,
   "join_excluded": true,
   "index_build": false
@@ -308,6 +339,7 @@ index with no events is `unknown(index_build_not_covered)`.
 add_path_accepted, add_path_displaced  core hooks patch and pathprobe.log_accepted
                                        (pathprobe_propose* turn it on)
 add_path_rejected                      core hooks patch and pathprobe.min_gap = 0
+add_path_removed                       core hooks patch with the removed hook
 add_path_precheck                      core hooks patch
 join_excluded                          pathprobe.enable_probe2
 survived_snapshot                      always

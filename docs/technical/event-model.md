@@ -32,6 +32,9 @@ path_id         identity of the path within this result (null without a Path)
 displacer_path_id, displacer_seq, other_pathtype
                 DISPLACED only: the path that displaced this one, its
                 ACCEPTED event and its type
+remover_path_id, remover_seq, remover_pathtype
+                REMOVED only: the path that removed this one and was then
+                rejected, its REJECTED event and its type
 dominator_path_id, dominator_seq, dominator_pathtype
                 REJECTED only: the old path add_path() stopped at as
                 dominating this one, its ACCEPTED event into the same rel
@@ -53,12 +56,16 @@ skipped   candidate filtered before a Path object existed
 rejected  materialized Path lost in add_path()
 accepted  materialized Path entered the frontier
 survived  path was present in an observed frontier
-displaced previously accepted path was pushed out
+displaced previously accepted path was pushed out by a path add_path()
+          accepted
+removed   previously accepted path was pushed out by a path add_path()
+          then rejected
 ```
 
-`displaced` needs a displacer that was accepted.  When `add_path()` removes
-old paths and then rejects the new path, the removed paths get no event;
-pathprobe only drops their path ids.
+`add_path()` can remove old paths that the new path dominates and then find
+a later old path that dominates the new one.  The new path is rejected; the
+old paths it removed get `removed`, right after its `rejected` event.  Like
+`displaced`, `removed` is terminal for the path in that rel.
 
 ## Absent events
 
@@ -100,9 +107,11 @@ rejected              rejected by add_path()
 unknown_after_accept  accepted, later outcome not observed
 survived_at_point     in the pathlist right after its own add_path();
                       displacement is not covered in this run
-survived              as above, and no displacement observed while
-                      displacement is covered
+survived              as above, and no displacement or removal observed
+                      while both are covered
 displaced             accepted, later pushed out by a better path
+removed               accepted, later pushed out by a path that add_path()
+                      then rejected
 survived_upper        the candidate path itself was accepted into an upper rel
 inconsistent          the events contradict a covered decision point
 ```
@@ -129,8 +138,10 @@ not_examined          build_index_paths() never called for it: relation not
                       planned, or partial predicate not implied
 not_generated         called, no path built (reasons in index_build)
 rejected              every observed add_path() rejected its paths
-displaced             paths were accepted, all later displaced
-survived              some accepted path was not displaced
+displaced             paths were accepted, all later displaced or removed,
+                      at least one displaced
+removed               paths were accepted, all later removed
+survived              some accepted path was neither displaced nor removed
 survived_at_point     in the pathlist right after injection; acceptance or
                       displacement not covered
 unknown               the deciding point is not covered, or no generated

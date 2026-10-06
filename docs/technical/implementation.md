@@ -101,9 +101,8 @@ that the JSON renderer emits as `paths[]`.  Children of join, single-input
 wrapper and multi-input paths are registered with their parent.  The probe1
 hooks call `pelog_path_forget` for every path `add_path()` is about to free,
 also when acceptance is not logged, so a recycled address gets a new id:
-the rejected new path, the displaced paths of an accepted one, and, through
-`probe1_removed_hook`, old paths that a new path removed before it was
-itself rejected (no event for those).
+the rejected new path, the displaced paths of an accepted one, and the
+removed paths of a rejected one.
 The map entry also keeps the seq of the path's last ACCEPTED event and the
 rel it went into (`pelog_path_accepted`), which the rejected hook uses for
 `dominator_seq`.
@@ -122,7 +121,10 @@ probe1  pathprobe_probe1.c: add_path frontier - PEK_REJECTED (lost to an
         existing path), PEK_ACCEPTED (entered the pathlist) followed by one
         PEK_DISPLACED per path it removed (from the dominated list the core
         patch keeps alive until the hook returns), both only with
-        pathprobe.log_accepted, and precheck PEK_SKIPPED; each event asks
+        pathprobe.log_accepted; PEK_REMOVED per path a rejected path had
+        removed (probe1_removed_hook, called right after the rejected hook;
+        remover_seq comes from the REJECTED event the rejected hook just
+        appended); and precheck PEK_SKIPPED; each event asks
         pathprobe_path_label() for an optional label
 probe2  pathprobe_probe2.c: join-level observation (setup/pathlist/search),
         gated by pathprobe.enable_probe2
