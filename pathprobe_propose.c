@@ -2417,7 +2417,6 @@ render_propose_card(PathProbeReport *report, StringInfo out,
 {
 	PathEventLog *log = report->log;
 	int			i;
-	bool		wp_survived = false;
 	bool		wp_rejected = false;
 	Cost		wp_best_cost = 0.0;
 	bool		wp_cost_set = false;
@@ -2463,8 +2462,6 @@ render_propose_card(PathProbeReport *report, StringInfo out,
 				wp_best_cost = ev->cost_total;
 				wp_cost_set = true;
 			}
-			if (ev->kind == PEK_SURVIVED)
-				wp_survived = true;
 			if (ev->kind == PEK_REJECTED)
 				wp_rejected = true;
 		}
@@ -2481,7 +2478,11 @@ render_propose_card(PathProbeReport *report, StringInfo out,
 		}
 	}
 
-	/* Derive fate string */
+	/*
+	 * Derive fate string.  The notes below follow this final fate, not
+	 * single events: a SURVIVED snapshot right after the candidate's own
+	 * add_path() does not mean it won if it was later displaced or removed.
+	 */
 	cf = propose_candidate_fate(log, spec, &illegal_seq);
 	fate = cand_fate_text(cf, false);
 	if (cf == CAND_ILLEGAL)
@@ -2507,9 +2508,13 @@ render_propose_card(PathProbeReport *report, StringInfo out,
 			note = "winner_forbidden policy active; "
 				"candidate competed but could not become cheapest";
 	}
-	else if (!spec->winner_forbidden && wp_survived)
+	else if (!spec->winner_forbidden &&
+			 (cf == CAND_SURVIVED || cf == CAND_UPPER))
 		note = "candidate won -- execution will fail in v0 "
 			"(diagnostic mode only)";
+	else if (!spec->winner_forbidden && cf == CAND_SURVIVED_AT_POINT)
+		note = "candidate survived its add_path(); later displacement "
+			"not observed";
 	else if (wp_rejected && gap_valid && gap > 0.0)
 		note = "candidate genuinely lost on cost";
 	else if (wp_rejected && spec->winner_forbidden)
