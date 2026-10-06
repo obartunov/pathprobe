@@ -196,6 +196,11 @@ In order of value.  Items marked done were implemented after the audit.
    explicit candidate, as already done for the top-level `fate`.
 5. Mark the source of each hypothetical index (`advisor` or `user`).
 
+Added after the audit, outside the list: properties a plan view needs next
+to the graph.  Events carry `cost_startup`; `paths[]` nodes carry `rows`,
+`required_outer` and the index of an index path (`index_oid`, `index_name`,
+or `hypothetical_index`).  See `json-format.md`.
+
 ## jq recipes
 
 Per hypothetical index lifecycle:

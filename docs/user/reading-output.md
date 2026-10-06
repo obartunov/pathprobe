@@ -68,10 +68,12 @@ fate `removed`, not `survived`.  A REJECTED event names the path that dominated 
 (`dominator_path_id`, `dominator_seq`, `dominator_pathtype`): the first path
 in the pathlist that `add_path()` found to be at least as good on cost,
 ordering, parameterization, rows and parallel safety.  The top-level
-`paths[]` array gives each id its type and relation, and the child edges of
+`paths[]` array gives each id its type and relation, the child edges of
 join paths (`outer_path_id`, `inner_path_id`), single-input wrappers
 (`subpath_id`) and paths with a list of inputs, such as Append or BitmapOr
-(`child_path_ids`).  `seq` is event order, not identity.  With the core
+(`child_path_ids`), and the row estimate, the parameterization
+(`required_outer`) and, for index paths, the index (`index_oid`,
+`index_name`, or `hypothetical_index`).  `seq` is event order, not identity.  With the core
 patch, a path id is not reused within one result when the planner frees a
 path and allocates another at the same address (GEQO excepted).  See
 [json-format](../technical/json-format.md#path-identity-and-graph-edges).

@@ -41,7 +41,8 @@ dominator_path_id, dominator_seq, dominator_pathtype
                 REJECTED only: the old path add_path() stopped at as
                 dominating this one, its ACCEPTED event into the same rel
                 and its type
-cost_total      path total cost where meaningful
+cost_startup, cost_total
+                path costs where meaningful
 gap_cost        difference from local competitor where meaningful
 skip_reason     precheck reason where available
 disabled_nodes  planner disabled-nodes marker

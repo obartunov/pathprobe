@@ -96,8 +96,10 @@ PathProbeReport   log + summary + advisor fields returned to the renderers
 ```
 
 Path identity (`pelog_path_id`, pathprobe.c): a hash map from Path pointer
-to a per-log id, plus a node table (`PathNode`: type, relids, child edges)
-that the JSON renderer emits as `paths[]`.  Children of join, single-input
+to a per-log id, plus a node table (`PathNode`: type, relids, child edges,
+rows, required_outer, index) that the JSON renderer emits as `paths[]`.
+The properties are read when the node is registered, while the Path is
+live; the index name is looked up when the JSON is rendered.  Children of join, single-input
 wrapper and multi-input paths are registered with their parent.  The probe1
 hooks call `pelog_path_forget` for every path `add_path()` is about to free,
 also when acceptance is not logged, so a recycled address gets a new id:

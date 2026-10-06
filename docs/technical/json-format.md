@@ -38,6 +38,7 @@ should tolerate empty arrays/objects.
   "origin": "proposed",
   "label": "candidate_name",
   "path_id": 4,
+  "cost_startup": 0.0,
   "cost_total": 1.0,
   "disabled_nodes": 1
 }
@@ -85,6 +86,8 @@ kept_reason is "startup" or "order?" on SURVIVED events (p0, j2) of a real
   path kept in the pathlist without being the cheapest total; absent
   otherwise
 cost fields are omitted when not meaningful or when costs are suppressed
+cost_startup and cost_total are the path's costs at the event; for skipped
+  events, the lower bounds add_path_precheck() compared
 strings are JSON-escaped, never interpolated raw
 path_id is null for skipped and excluded events (no Path exists yet)
 displacer_seq is null if the displacer's ACCEPTED event was not recorded
@@ -144,10 +147,34 @@ or Material path built inside a nested loop).
 
 ```json
 {"path_id": 12, "pathtype": "NestLoop", "rel": "{1,2}",
- "outer_path_id": 2, "inner_path_id": 9}
-{"path_id": 9, "pathtype": "BitmapHeapScan", "rel": "{2}", "subpath_id": 8}
+ "outer_path_id": 2, "inner_path_id": 9, "rows": 15}
+{"path_id": 9, "pathtype": "BitmapHeapScan", "rel": "{2}", "subpath_id": 8,
+ "rows": 3, "required_outer": "{1}"}
 {"path_id": 8, "pathtype": "BitmapOr", "rel": "{2}", "child_path_ids": [6, 7]}
-{"path_id": 17, "pathtype": "Append", "rel": "{1}", "child_path_ids": [1, 3]}
+{"path_id": 6, "pathtype": "IndexScan", "rel": "{2}", "rows": 2,
+ "required_outer": "{1}", "index_oid": 16403, "index_name": "orders_customer_idx"}
+{"path_id": 17, "pathtype": "Append", "rel": "{1}", "child_path_ids": [1, 3],
+ "rows": 40000}
+```
+
+Besides the edges, a node carries properties that do not change after the
+Path is built, read when the node is registered:
+
+```text
+rows                the path's row estimate (per loop for a parameterized
+                    path); omitted for BitmapAnd and BitmapOr, whose rows the
+                    planner leaves at 0 ("not used"); can be 0 for a relation
+                    proven empty
+required_outer      the rels the path is parameterized by, as "{1}"; omitted
+                    when the path is not parameterized
+index_oid,          IndexScan, IndexOnlyScan, and a BitmapHeapScan over a
+index_name          single index: the index and its name (looked up when the
+                    JSON is rendered); omitted for other paths and for a
+                    BitmapHeapScan over BitmapAnd / BitmapOr
+hypothetical_index  true instead of index_oid and index_name when the index
+                    is a pathprobe hypothetical index: its oid is a fake one
+                    with no catalog entry and may equal a real relation's
+                    oid; the hypo:<name> label of the path's events names it
 ```
 
 ```text
