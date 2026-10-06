@@ -224,6 +224,20 @@ SELECT lc_card('SELECT * FROM lc_n n JOIN lc_m m ON m.n_id = n.id',
  note     : candidate won -- execution will fail in v0 (diagnostic mode only)
 (3 rows)
 
+-- 6d. the snapshot's cheapest real path is labelled as what it is: taken
+-- before injection, not the plan's winner
+SELECT regexp_replace(line, '[0-9]+\.[0-9]+', 'N', 'g') AS line
+FROM regexp_split_to_table(pathprobe_propose('SELECT * FROM lc_n n JOIN lc_m m ON m.n_id = n.id',
+  '{"target": {"relname": "lc_m"}, "candidate": {"pathname": "j", "provider": "t"},
+    "cost": {"total_cost": 100.0, "rows": 20000}}'), E'\n') line
+WHERE line ~* 'winner|cheapest';
+                   line                    
+-------------------------------------------
+ mode   : winner_forbidden=off
+ cheapest : SeqScan @ N (before injection)
+ pre-injection cheapest : SeqScan @ N
+(3 rows)
+
 DROP FUNCTION lc_card(text, text);
 DROP FUNCTION lc_hypo(text, text);
 DROP TABLE lc_a, lc_b, lc_h, lc_n, lc_m;
