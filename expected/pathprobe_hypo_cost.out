@@ -1,0 +1,82 @@
+-- hypothetical btree indexes are costed like real ones: btcostestimate()
+-- charges (tree_height + 1) descent pages and, unlike the gist and spgist
+-- estimators, does not derive an unknown height
+SET client_min_messages = warning;
+CREATE EXTENSION IF NOT EXISTS pathprobe;
+RESET client_min_messages;
+SET max_parallel_workers_per_gather = 0;
+CREATE TABLE hc_t (id int PRIMARY KEY, c int, d text);
+INSERT INTO hc_t SELECT g, g % 1000, 'v' || (g % 5000) FROM generate_series(1, 30000) g;
+CREATE INDEX hc_t_c ON hc_t (c);
+CREATE INDEX hc_t_ld ON hc_t (lower(d));
+CREATE TABLE hc_b (id int, c int);
+INSERT INTO hc_b SELECT g, g FROM generate_series(1, 150000) g;
+CREATE INDEX hc_b_c ON hc_b (c);
+ANALYZE hc_t, hc_b;
+-- min costs of the real and the hypothetical index scan in one probe
+CREATE FUNCTION hc_costs(q text, spec text, hypo text,
+                         OUT pathtype text, OUT startup_delta numeric,
+                         OUT total_delta numeric)
+RETURNS SETOF record LANGUAGE sql AS $$
+  SELECT e->>'pathtype',
+         round((min((e->>'cost_startup')::numeric) FILTER (WHERE e->>'label' = 'hypo:' || hypo)
+              - min((e->>'cost_startup')::numeric) FILTER (WHERE e->>'label' IS NULL)), 2),
+         round((min((e->>'cost_total')::numeric) FILTER (WHERE e->>'label' = 'hypo:' || hypo)
+              - min((e->>'cost_total')::numeric) FILTER (WHERE e->>'label' IS NULL)), 2)
+  FROM jsonb_array_elements(pathprobe_propose_json(q, spec)::jsonb->'events') e
+  WHERE e->>'rel' = '{1}' AND e->>'pathtype' IN ('IndexScan', 'BitmapHeapScan')
+  GROUP BY 1 ORDER BY 1
+$$;
+-- 1. the same keys as a real btree: the same startup and total cost, for a
+-- one-level (hc_t) and a two-level (hc_b) tree.  Without a tree height the
+-- hypothetical index was cheaper by the descent cost (0.25 and 0.38 here).
+SELECT 'hc_t' AS rel, * FROM hc_costs('SELECT * FROM hc_t WHERE c = 3',
+  '{"hypo_indexes":[{"name":"h_c","relname":"hc_t","columns":["c"]}]}', 'h_c');
+ rel  |    pathtype    | startup_delta | total_delta 
+------+----------------+---------------+-------------
+ hc_t | BitmapHeapScan |          0.00 |        0.00
+ hc_t | IndexScan      |          0.00 |        0.00
+(2 rows)
+
+SELECT 'hc_b' AS rel, * FROM hc_costs('SELECT * FROM hc_b WHERE c = 3',
+  '{"hypo_indexes":[{"name":"h_bc","relname":"hc_b","columns":["c"]}]}', 'h_bc');
+ rel  |    pathtype    | startup_delta | total_delta 
+------+----------------+---------------+-------------
+ hc_b | BitmapHeapScan |          0.00 |        0.00
+ hc_b | IndexScan      |          0.00 |        0.00
+(2 rows)
+
+-- 2. a hypothetical duplicate of the real lower(d) index is not cheaper,
+-- does not survive and is not in the plan
+SELECT * FROM hc_costs($$SELECT * FROM hc_t WHERE lower(d) = 'v42'$$,
+  '{"hypo_sql":["CREATE INDEX h_ld ON hc_t (lower(d))"]}', 'h_ld')
+WHERE startup_delta < 0 OR total_delta < 0;
+ pathtype | startup_delta | total_delta 
+----------+---------------+-------------
+(0 rows)
+
+WITH j AS (SELECT pathprobe_propose_json($$SELECT * FROM hc_t WHERE lower(d) = 'v42'$$,
+             '{"hypo_sql":["CREATE INDEX h_ld ON hc_t (lower(d))"]}')::jsonb AS j)
+SELECT h->>'name' AS name, h->>'fate' AS fate, h->>'in_plan' AS in_plan
+FROM j, jsonb_array_elements(j->'hypo_indexes') h;
+ name |   fate   | in_plan 
+------+----------+---------
+ h_ld | rejected | false
+(1 row)
+
+-- 3. the advisor still proposes the duplicate (a known dedup gap), but it
+-- no longer wins: no candidate in the plan, no benefit
+WITH j AS (SELECT pathprobe_propose_json($$SELECT * FROM hc_t WHERE lower(d) = 'v42'$$,
+             '{"advise": true}')::jsonb AS j)
+SELECT (SELECT string_agg(h->>'ddl', '; ') FROM j, jsonb_array_elements(j->'hypo_indexes') h
+        WHERE h->>'ddl' LIKE '%lower(d)%') IS NOT NULL AS duplicate_proposed,
+       (SELECT count(*) FROM j, jsonb_array_elements(j->'hypo_indexes') h
+        WHERE (h->>'in_plan')::bool) AS in_plan,
+       (SELECT (j->'advisor'->>'query_level_benefit')::numeric <= 0 FROM j) AS no_benefit;
+ duplicate_proposed | in_plan | no_benefit 
+--------------------+---------+------------
+ t                  |       0 | t
+(1 row)
+
+DROP FUNCTION hc_costs(text, text, text);
+DROP TABLE hc_t, hc_b;
