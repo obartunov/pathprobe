@@ -47,8 +47,8 @@ WITH j AS (SELECT pathprobe_propose_json($$SELECT * FROM hc_t WHERE lower(d) = '
 SELECT h->>'name' AS name, h->>'fate' AS fate, h->>'in_plan' AS in_plan
 FROM j, jsonb_array_elements(j->'hypo_indexes') h;
 
--- 3. the advisor still proposes the duplicate (a known dedup gap), but it
--- no longer wins: no candidate in the plan, no benefit
+-- 3. the advisor does not propose the duplicate (expression candidates are
+-- deduplicated against existing indexes): nothing in the plan, no benefit
 WITH j AS (SELECT pathprobe_propose_json($$SELECT * FROM hc_t WHERE lower(d) = 'v42'$$,
              '{"advise": true}')::jsonb AS j)
 SELECT (SELECT string_agg(h->>'ddl', '; ') FROM j, jsonb_array_elements(j->'hypo_indexes') h
