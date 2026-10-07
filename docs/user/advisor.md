@@ -125,9 +125,9 @@ a function returning boolean (`flag`, `NOT flag`, `flag IS TRUE`,
 that an OR used to become one boolean expression candidate; that was fixed
 after the audit.
 
-One more known defect: an existing expression index is proposed again.  Such
-a duplicate is costed like the real index (hypothetical btree indexes get a
-tree height, as real ones do), so it does not win the plan.  See
+An expression candidate that an existing expression index already provides
+is not proposed: the audit found that `(lower(d))` was proposed again next to
+an existing `lower(d)` index, and that was fixed after the audit.  See
 `docs/technical/advisor-audit.md` and
 [example 9](../examples/09-advisor-audit.md).
 
@@ -140,8 +140,10 @@ With:
 ```
 
 advisor suppresses candidates whose key list is already covered as a prefix of
-an existing plain btree index.  This is a noise-reduction heuristic, not a full
-index design rule.
+an existing plain btree index, and expression candidates whose expression is
+the leading key of an existing wider index.  Without the option only an exact
+duplicate is suppressed.  Partial indexes never suppress a candidate.  This is
+a noise-reduction heuristic, not a full index design rule.
 
 ## Hypothetical indexes by JSON
 

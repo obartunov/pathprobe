@@ -30,7 +30,9 @@ ordered     query_pathkeys, else group_pathkeys, ASC only, all from this
             relation
 dedup       same column list as an earlier candidate of this run; same keys
             as an existing plain btree index; with advise_skip_prefix also a
-            strict prefix of an existing plain btree index
+            strict prefix of an existing plain btree index; for expression
+            candidates the same against existing expression indexes (after
+            the fix of bug 3, see below); partial indexes never count
 caps        pathprobe.max_advisor_candidates per query (advisor.truncated)
 ```
 
@@ -44,7 +46,8 @@ Fates are from the example run at the time of the audit.  `built` =
 since then the four rows that won only by it are `rejected` with `in_plan`
 false: the covering variant of `ex9_u`'s primary key, `(lower(d))`, `(a, b)`
 next to `(b, a)`, and the six-column composite.  Bug 2 was fixed after the
-audit too: both OR rows now produce no atom and no candidate.
+audit too: both OR rows now produce no atom and no candidate.  After the
+fix of bug 3 the `lower(d)` row produces no candidate at all.
 
 ```text
 query pattern              advisor behavior                       candidate?  hypo fate             in_plan  class
@@ -128,7 +131,8 @@ rule produced a candidate.  The link is the naming convention and the
 
 ```text
 same keys as an existing plain btree index      skipped (always)
-same keys as an existing expression index       NOT skipped: re-proposed (bug)
+same keys as an existing expression index       NOT skipped: re-proposed (bug 3; now
+                                                skipped, fixed after the audit)
 same keys, different order (a, b) vs (b, a)     not skipped; for equality-only
                                                 queries a functional duplicate
 strict prefix of an existing index              proposed unless advise_skip_prefix
@@ -183,6 +187,16 @@ displaced by another advisor candidate          single-column candidates by the
    `adv_skip_candidate()`, and `adv_coverage()` ignores expression indexes,
    so an existing expression index is proposed again.
 
+   Fixed after the audit: an expression candidate is checked against the
+   relation's real btree indexes with the planner's own test,
+   `match_index_to_operand()` (`equal()` on the expression trees, with
+   RelabelType stripped), on each index's leading key.  An index whose only
+   key matches is a duplicate and the candidate is always skipped; an index
+   with more keys and the expression first, such as `(lower(d), a)`, skips it
+   only with `advise_skip_prefix`, as for column candidates.  Partial,
+   hypothetical and non-btree indexes do not count, as for column candidates;
+   the index's operator class is not compared, as for column candidates.
+
 ## Unclear or undocumented behavior
 
 - At most 6 atoms per relation; further restrictions are dropped without a
@@ -219,7 +233,7 @@ Bugs first.  Items marked done were implemented after the audit.
 1. Done: hypothetical btree indexes get a tree height, so they are not
    cheaper than identical real indexes.
 2. Done: OR / AND `BoolExpr` is not a boolean atom.
-3. Run expression candidates through deduplication, including existing
+3. Done: expression candidates are deduplicated against existing
    expression indexes.
 4. Report dropped atoms (cap) and skipped clause classes in the advisor
    block; mark each hypothetical index with its source and generation rule.

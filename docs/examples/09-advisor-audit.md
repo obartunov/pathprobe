@@ -36,7 +36,7 @@ A selection of rows, cells abbreviated:
  7 | join, no constant on t   | ex9_u: id= | ex9_t:           | ex9_u (id) INCLUDE ... |     1 | rejected  | f
 19 | join, constant via EC    | ex9_u: w= | ex9_t: c=         | ex9_t (c)              |     1 | survived  | t
  9 | OR, one column           | ex9_t:                        |                        |       |           |
-13 | expression, index exists | ex9_t: (lower(d))=            | ex9_t ((lower(d)))     |     1 | rejected  | f
+13 | expression, index exists | ex9_t: (lower(d))=            |                        |       |           |
 15 | keys of (b, a) reversed  | ex9_t: a=, b=                 | ex9_t (a, b)           |     1 | rejected  | f
 17 | LIKE prefix              | ex9_t:                        |                        |       |           |
 18 | eight restrictions       | ex9_t: a=, b=, c=, d=, ts=, id= | ex9_t (a, b, c, d, ts, id) | 1 | rejected | f
@@ -62,13 +62,16 @@ A selection of rows, cells abbreviated:
 - A boolean column is an atom, also under `NOT` (14, 20), and so is a
   function returning boolean (23); another boolean expression, such as
   `(a > b) IS TRUE`, is not (22).
-- An expression index that already exists is proposed again (13), and
-  `(a, b)` is proposed next to an existing `(b, a)` (15).  Neither wins:
+- An expression index that already exists is not proposed again (13): the
+  atom is extracted, but the existing `lower(d)` index covers it.  When the
+  audit was written it was proposed again; that was fixed.
+- `(a, b)` is proposed next to an existing `(b, a)` (15), but does not win:
   a hypothetical btree index costs the same as an identical real one, and
-  the planner keeps the real one.  When the audit was written they did win
+  the planner keeps the real one.  When the audit was written it did win
   `in_plan`, by the descent cost the hypothetical index was missing (0.25
-  here), as did the six-column composite next to the primary key (18) and
-  the covering variant of `ex9_u`'s primary key (7); that was fixed.
+  here), as did `(lower(d))` (13), the six-column composite next to the
+  primary key (18) and the covering variant of `ex9_u`'s primary key (7);
+  that was fixed.
 - Of eight restrictions only six become atoms (18); nothing reports the two
   that were dropped.
 
