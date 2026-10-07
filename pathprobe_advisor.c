@@ -132,6 +132,23 @@ adv_atom_from_node(RelOptInfo *rel, Node *node, Oid opno, AdvCol * out)
 	return true;
 }
 
+/*
+ * The operand of a boolean qual that the advisor turns into an atom: a
+ * boolean column, or a function returning boolean (an expression index on
+ * f(x) serves WHERE f(x)).  Not a BoolExpr: an OR is not one indexable
+ * expression, and a planner-level AND is already split into separate
+ * quals.  Other boolean-typed expressions are not proposed.
+ */
+static bool
+adv_bool_operand(Node *node)
+{
+	if (node && IsA(node, RelabelType))
+		node = (Node *) ((RelabelType *) node)->arg;
+	if (node == NULL || exprType(node) != BOOLOID)
+		return false;
+	return IsA(node, Var) || IsA(node, FuncExpr);
+}
+
 static bool
 adv_col_btree_qual(RelOptInfo *rel, RangeTblEntry *rte, RestrictInfo *rinfo,
 				   AdvCol * out)
@@ -195,27 +212,24 @@ adv_col_btree_qual(RelOptInfo *rel, RangeTblEntry *rte, RestrictInfo *rinfo,
 
 	/*
 	 * Boolean quals, mirroring match_boolean_index_clause (indxpath.c):
-	 * bare boolean clause (col / f(x)), NOT arg, BooleanTest IS TRUE /
-	 * IS FALSE.  All are equality-like (col = true/false) for a btree
-	 * candidate.  Other BooleanTest forms are not indexed by the core
-	 * either.
+	 * bare boolean clause, NOT arg, BooleanTest IS TRUE / IS FALSE, each
+	 * equality-like (operand = true/false) for a btree candidate.  The
+	 * operand must pass adv_bool_operand(), so an OR, or any other
+	 * BoolExpr, is not taken as a boolean expression atom.  Other
+	 * BooleanTest forms are not indexed by the core either.
 	 */
-	if (IsA(clause, BoolExpr) &&
-		((BoolExpr *) clause)->boolop == NOT_EXPR &&
-		list_length(((BoolExpr *) clause)->args) == 1)
+	if (IsA(clause, BoolExpr))
 	{
-		AdvCol		c;
+		BoolExpr   *be = (BoolExpr *) clause;
 
-		if (adv_atom_from_node(rel,
-							   (Node *) linitial(((BoolExpr *) clause)->args),
-							   InvalidOid, &c) &&
-			exprType((Node *) linitial(((BoolExpr *) clause)->args)) == BOOLOID)
-		{
-			*out = c;
-			out->is_eq = true;
-			return true;
-		}
-		return false;
+		if (be->boolop != NOT_EXPR || list_length(be->args) != 1 ||
+			!adv_bool_operand((Node *) linitial(be->args)))
+			return false;
+		if (!adv_atom_from_node(rel, (Node *) linitial(be->args),
+								InvalidOid, out))
+			return false;
+		out->is_eq = true;
+		return true;
 	}
 	if (IsA(clause, BooleanTest))
 	{
@@ -223,14 +237,13 @@ adv_col_btree_qual(RelOptInfo *rel, RangeTblEntry *rte, RestrictInfo *rinfo,
 
 		if (bt->booltesttype != IS_TRUE && bt->booltesttype != IS_FALSE)
 			return false;
-		if (adv_atom_from_node(rel, (Node *) bt->arg, InvalidOid, out))
-		{
-			out->is_eq = true;
-			return true;
-		}
-		return false;
+		if (!adv_bool_operand((Node *) bt->arg) ||
+			!adv_atom_from_node(rel, (Node *) bt->arg, InvalidOid, out))
+			return false;
+		out->is_eq = true;
+		return true;
 	}
-	if (exprType((Node *) clause) == BOOLOID &&
+	if (adv_bool_operand((Node *) clause) &&
 		adv_atom_from_node(rel, (Node *) clause, InvalidOid, out))
 	{
 		out->is_eq = true;
