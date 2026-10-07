@@ -361,6 +361,37 @@ adv_coverage(RelOptInfo *rel, AttrNumber *attnos, int n, int nkeys)
 	return best;
 }
 
+/*
+ * Coverage of a single-key expression candidate by the rel's real indexes,
+ * with the classes of adv_coverage(): an index whose leading key matches
+ * the expression is EQUAL if that is its only key column, else WIDER.
+ * The match is match_index_to_operand(), the test the planner uses to put
+ * a qual on an index column (equal() on the expression trees, RelabelType
+ * stripped).  As in adv_coverage(), hypothetical, partial and non-btree
+ * indexes do not count.
+ */
+static AdvCoverage
+adv_expr_coverage(RelOptInfo *rel, Expr *expr)
+{
+	AdvCoverage best = ADV_COV_NONE;
+	ListCell   *lc;
+
+	foreach(lc, rel->indexlist)
+	{
+		IndexOptInfo *ioi = (IndexOptInfo *) lfirst(lc);
+
+		if (ioi->relam != BTREE_AM_OID || ioi->hypothetical ||
+			ioi->indpred != NIL || ioi->nkeycolumns < 1)
+			continue;
+		if (!match_index_to_operand((Node *) expr, 0, ioi))
+			continue;
+		if (ioi->nkeycolumns == 1)
+			return ADV_COV_EQUAL;
+		best = ADV_COV_WIDER;
+	}
+	return best;
+}
+
 static bool
 adv_cap_reached(ProposedPathState * state)
 {
@@ -554,13 +585,19 @@ pathprobe_advise_generate(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte
 	/* expression atoms: single-column expression candidates via the real
 	 * CREATE INDEX path (deparse -> parser -> transformIndexStmt), which
 	 * already handles indexprs/indextlist.  Composite with expressions is
-	 * out of scope for v1 (named boundary). */
+	 * out of scope for v1 (named boundary).  Existing indexes are checked
+	 * as for column candidates. */
 	for (i = 0; i < ncols; i++)
 	{
 		char	   *edd;
 		HypoIndexSpec *h;
+		AdvCoverage ecov;
 
 		if (cols[i].attno != 0)
+			continue;
+		ecov = adv_expr_coverage(rel, cols[i].expr);
+		if (ecov == ADV_COV_EQUAL ||
+			(ecov == ADV_COV_WIDER && state->advise_skip_prefix))
 			continue;
 		edd = deparse_expression((Node *) cols[i].expr,
 								 deparse_context_for(relname, rte->relid),
