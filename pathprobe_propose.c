@@ -70,6 +70,7 @@
 
 #include "access/amapi.h"
 #include "access/itup.h"
+#include "access/nbtree.h"
 #include "catalog/pg_am_d.h"
 #include "catalog/namespace.h"
 #include "miscadmin.h"
@@ -892,6 +893,34 @@ hypo_spec_from_sql(char *sql, int idx)
 }
 
 /*
+ * Height of a hypothetical btree with leaf_pages leaf pages: the number of
+ * levels above the leaf level, which is what a real index reports through
+ * amgettreeheight (0 when the root is a leaf).  btcostestimate() charges
+ * (tree_height + 1) descent pages and, unlike gistcostestimate() and
+ * spgcostestimate(), does not derive an unknown (-1) height, so -1 would
+ * make a hypothetical btree cheaper than the same real one.
+ *
+ * leaf_entries_per_page is the leaf estimate at BTREE_DEFAULT_FILLFACTOR.
+ * As in a freshly built index, internal pages are filled to
+ * BTREE_NONLEAF_FILLFACTOR; pivots are taken to be as wide as leaf tuples
+ * (suffix truncation only makes them narrower).
+ */
+static int
+hypo_btree_height(double leaf_pages, double leaf_entries_per_page)
+{
+	double		fanout = Max(2.0, leaf_entries_per_page *
+							 BTREE_NONLEAF_FILLFACTOR / BTREE_DEFAULT_FILLFACTOR);
+	int			height = 0;
+
+	while (leaf_pages > 1.0)
+	{
+		leaf_pages = ceil(leaf_pages / fanout);
+		height++;
+	}
+	return height;
+}
+
+/*
  * hypo_fill_am - fill AM capability fields from the real AM routine
  *
  * Mirrors plancat.c get_relation_info() (:308-347) so that hypothetical
@@ -1114,8 +1143,10 @@ hypo_build_from_stmt(PlannerInfo *root, RelOptInfo *rel,
 
 		ioi->tuples = rel->tuples;
 		ioi->pages = (BlockNumber) Max(2, ceil(rel->tuples / epp));
+		/* other AMs ignore it or derive it from pages */
+		ioi->tree_height = (h->amoid == BTREE_AM_OID) ?
+			hypo_btree_height(ceil(rel->tuples / epp), epp) : -1;
 	}
-	ioi->tree_height = -1;
 
 	return ioi;
 }
@@ -1212,8 +1243,9 @@ hypo_build_indexoptinfo(PlannerInfo *root, RelOptInfo *rel,
 		entries_per_page = Max(1.0, usable / entry_width);
 		ioi->tuples = rel->tuples;
 		ioi->pages = (BlockNumber) Max(2, ceil(rel->tuples / entries_per_page));
+		ioi->tree_height = hypo_btree_height(ceil(rel->tuples / entries_per_page),
+											 entries_per_page);
 	}
-	ioi->tree_height = -1;		/* let btcostestimate derive */
 
 	return ioi;
 }
