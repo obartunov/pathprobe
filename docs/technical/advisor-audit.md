@@ -38,7 +38,11 @@ the same path as `hypo_indexes`: injection, `build_index_paths()`, `add_path()`.
 
 ## Patterns
 
-Fates are from the example run.  `built` = `index_build.generated > 0`.
+Fates are from the example run at the time of the audit.  `built` =
+`index_build.generated > 0`.  Bug 1 was fixed after the audit (see below);
+since then the four rows that won only by it are `rejected` with `in_plan`
+false: the covering variant of `ex9_u`'s primary key, `(lower(d))`, `(a, b)`
+next to `(b, a)`, and the six-column composite.
 
 ```text
 query pattern              advisor behavior                       candidate?  hypo fate             in_plan  class
@@ -125,6 +129,16 @@ displaced by another advisor candidate          single-column candidates by the
    the primary key, a covering variant of a primary key) wins with a
    `query_level_benefit` of exactly 0.25 and `in_plan = true`.  This makes
    duplicates look useful.
+
+   Fixed after the audit: both builders estimate the height of a freshly
+   built btree from the leaf page estimate, with internal pages filled to
+   `BTREE_NONLEAF_FILLFACTOR`; other AMs keep -1.  A hypothetical btree
+   over the same keys as a real one now has the same startup and total
+   cost (one- and two-level trees checked, `pathprobe_hypo_cost`).  The
+   duplicates above are no longer in the plan and report no benefit.  For
+   an expression without statistics the width falls back to the type's
+   average, so its page count, and possibly its height, can exceed the real
+   index's: the hypothetical index then costs more, not less.
 2. **An OR restriction becomes a boolean expression candidate.**  The
    "bare boolean clause" branch of `adv_col_btree_qual()` accepts any
    boolean-typed clause, including an OR `BoolExpr`, so the advisor proposes
@@ -166,11 +180,10 @@ benefit per candidate           query_level_benefit is for the whole set;
 
 ## Follow-ups
 
-Bugs first; none implemented here.
+Bugs first.  Items marked done were implemented after the audit.
 
-1. Give hypothetical btree indexes a tree height (as the gist/spgist
-   estimators derive it from `pages`), so they are not cheaper than
-   identical real indexes.
+1. Done: hypothetical btree indexes get a tree height, so they are not
+   cheaper than identical real indexes.
 2. Do not treat OR / AND `BoolExpr` as a boolean atom.
 3. Run expression candidates through deduplication, including existing
    expression indexes.

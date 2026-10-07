@@ -116,10 +116,10 @@ Skipped does not mean impossible.  It means this advisor pass does not model
 that shape.  An `OR` restriction is not split into branches: the whole clause
 currently becomes one boolean expression candidate, which is a known defect.
 
-Two more known defects: an existing expression index is proposed again, and a
-hypothetical btree index is costed without the descent cost of a real one, so
-a functional duplicate of an existing index can show `in_plan = true` with a
-small `query_level_benefit`.  See `docs/technical/advisor-audit.md` and
+One more known defect: an existing expression index is proposed again.  Such
+a duplicate is costed like the real index (hypothetical btree indexes get a
+tree height, as real ones do), so it does not win the plan.  See
+`docs/technical/advisor-audit.md` and
 [example 9](../examples/09-advisor-audit.md).
 
 ## Existing index skip

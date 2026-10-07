@@ -33,13 +33,13 @@ A selection of rows, cells abbreviated:
  3 | equality + range         | ex9_t: c=, ts~                | ex9_t (c)              |     1 | displaced | f
  4 | ORDER BY ... LIMIT       | ex9_t:                        | ex9_t (ts)             |     1 | survived  | t
  5 | ORDER BY ... DESC LIMIT  | ex9_t:                        |                        |       |           |
- 7 | join, no constant on t   | ex9_u: id= | ex9_t:           | ex9_u (id) INCLUDE ... |     1 | survived  | t
+ 7 | join, no constant on t   | ex9_u: id= | ex9_t:           | ex9_u (id) INCLUDE ... |     1 | rejected  | f
 19 | join, constant via EC    | ex9_u: w= | ex9_t: c=         | ex9_t (c)              |     1 | survived  | t
  9 | OR, one column           | ex9_t: (((ts = ...) OR ...))= | ex9_t ((((ts = ...)))) |     1 | rejected  | f
-13 | expression, index exists | ex9_t: (lower(d))=            | ex9_t ((lower(d)))     |     1 | survived  | t
-15 | keys of (b, a) reversed  | ex9_t: a=, b=                 | ex9_t (a, b)           |     1 | survived  | t
+13 | expression, index exists | ex9_t: (lower(d))=            | ex9_t ((lower(d)))     |     1 | rejected  | f
+15 | keys of (b, a) reversed  | ex9_t: a=, b=                 | ex9_t (a, b)           |     1 | rejected  | f
 17 | LIKE prefix              | ex9_t:                        |                        |       |           |
-18 | eight restrictions       | ex9_t: a=, b=, c=, d=, ts=, id= | ex9_t (a, b, c, d, ts, id) | 1 | survived | t
+18 | eight restrictions       | ex9_t: a=, b=, c=, d=, ts=, id= | ex9_t (a, b, c, d, ts, id) | 1 | rejected | f
 ```
 
 ## Explanation
@@ -54,11 +54,12 @@ A selection of rows, cells abbreviated:
 - An `OR` becomes one boolean expression candidate; for `ts = x OR ts = y`
   no `(ts)` candidate is generated (9).
 - An expression index that already exists is proposed again (13), and
-  `(a, b)` is proposed next to an existing `(b, a)` (15).  Both "win" in
-  `in_plan`: a hypothetical btree index is costed without the descent cost
-  of a real one, so it beats an identical real index by that amount (0.25
-  here).  The same happens to the six-column composite next to the primary
-  key (18).
+  `(a, b)` is proposed next to an existing `(b, a)` (15).  Neither wins:
+  a hypothetical btree index costs the same as an identical real one, and
+  the planner keeps the real one.  When the audit was written they did win
+  `in_plan`, by the descent cost the hypothetical index was missing (0.25
+  here), as did the six-column composite next to the primary key (18) and
+  the covering variant of `ex9_u`'s primary key (7); that was fixed.
 - Of eight restrictions only six become atoms (18); nothing reports the two
   that were dropped.
 
@@ -69,8 +70,8 @@ classification of each behavior, and the bugs found.
 
 - `built` is always 1 here: the advisor only proposes keys taken from
   indexable clauses or pathkeys, so its candidates are not `not_generated`.
-- A small positive `query_level_benefit` together with `in_plan = true` is
-  not evidence of a useful index while the descent-cost difference above
-  is not fixed.
+- `in_plan = true` for a candidate that duplicates an existing index
+  would now point at a costing difference other than the tree height, for
+  example a page estimate; it is not evidence of a useful index.
 - The checks in the script assert what the advisor generates, not which
   candidate wins.

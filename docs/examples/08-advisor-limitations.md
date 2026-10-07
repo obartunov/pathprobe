@@ -23,7 +23,7 @@ indexes that could exist.
 ```text
 A  join, filter on c.region
    atoms: "ex8_orders:  | ex8_customers: region="
-   adv_1 ex8_customers (region)                  survived  in_plan   benefit 53.40
+   adv_1 ex8_customers (region)                  survived  in_plan   benefit 53.15
    adv_2 ex8_customers (region) INCLUDE (...)    rejected
 
 B  total IS NOT NULL AND customer_id = 9

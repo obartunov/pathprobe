@@ -35,7 +35,7 @@ present.
 
 ```text
 {"atoms": "ex7_orders: customer_id=, status=", "enabled": true,
- "baseline_cost": 731.03, "plan_cost": 15.21, "query_level_benefit": 715.82, ...}
+ "baseline_cost": 731.03, "plan_cost": 15.46, "query_level_benefit": 715.57, ...}
 ```
 
 One row per candidate, built from `hypo_indexes[]` by a helper in the script:
@@ -60,8 +60,8 @@ The displacement chain at the base relation:
  seq |      path      |   event   |   label    | path_id | displacer_path_id | displacer_seq | other_pathtype | gap_cost
 -----+----------------+-----------+------------+---------+-------------------+---------------+----------------+----------
    1 | SeqScan        | accepted  |            |       1 |                   |               |                |
-   3 | IndexScan      | accepted  | hypo:adv_1 |       2 |                   |               |                | 666.91
-   4 | SeqScan        | displaced |            |       1 |                 2 |             3 | IndexScan      | 666.91
+   3 | IndexScan      | accepted  | hypo:adv_1 |       2 |                   |               |                | 666.66
+   4 | SeqScan        | displaced |            |       1 |                 2 |             3 | IndexScan      | 666.66
    5 | BitmapHeapScan | accepted  | hypo:adv_1 |       3 |                   |               |                | 10.11
    6 | IndexScan      | displaced | hypo:adv_1 |       2 |                 3 |             5 | BitmapHeapScan | 10.11
   10 | IndexScan      | accepted  | hypo:adv_3 |       6 |                   |               |                | 37.90
