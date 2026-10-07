@@ -56,7 +56,11 @@ INSERT INTO ex9_patterns VALUES
   (15, 'keys of (b, a) reversed',  'SELECT * FROM ex9_t WHERE a = 7 AND b = 7'),
   (16, 'prefix of (b, a)',         'SELECT * FROM ex9_t WHERE b = 7'),
   (17, 'LIKE prefix',              'SELECT * FROM ex9_t WHERE d LIKE ''v1%'''),
-  (18, 'eight restrictions',       'SELECT * FROM ex9_t WHERE a = 1 AND b = 1 AND c = 1 AND d = ''x'' AND ts = ''2026-01-01'' AND flag AND payload IS NULL AND id = 5');
+  (18, 'eight restrictions',       'SELECT * FROM ex9_t WHERE a = 1 AND b = 1 AND c = 1 AND d = ''x'' AND ts = ''2026-01-01'' AND flag AND payload IS NULL AND id = 5'),
+  (20, 'NOT boolean column',       'SELECT * FROM ex9_t WHERE NOT flag AND c = 3'),
+  (21, 'AND inside OR',            'SELECT * FROM ex9_t WHERE (a = 1 AND b = 2) OR c = 3'),
+  (22, 'boolean expression',       'SELECT * FROM ex9_t WHERE (a > b) IS TRUE'),
+  (23, 'boolean function',         'SELECT * FROM ex9_t WHERE isfinite(ts)');
 
 SELECT p.n, p.pattern, r.*
 FROM ex9_patterns p, LATERAL pg_temp.ex9_advise(p.q) r
@@ -78,12 +82,15 @@ FROM (VALUES
    (SELECT bool_and(candidate IS NULL OR candidate NOT LIKE 'ex9_t%') FROM ex9_result WHERE n = 7)),
   ('a constant reaching t.c through the equivalence class does give one',
    (SELECT bool_or(candidate = 'ex9_t (c)') FROM ex9_result WHERE n = 19)),
-  ('an OR becomes one boolean expression candidate, not per-branch indexes',
-   (SELECT bool_and(cnt = 1 AND all_or) FROM
-      (SELECT n, count(*) AS cnt, bool_and(candidate LIKE '%OR%') AS all_or
-       FROM ex9_result WHERE n IN (8, 9) GROUP BY n) x)),
-  ('the one-column OR gets no plain (ts) candidate',
-   (SELECT bool_and(candidate <> 'ex9_t (ts)') FROM ex9_result WHERE n = 9)),
+  ('an OR gets no atom and no candidate, also on one column or around an AND',
+   (SELECT bool_and(candidate IS NULL AND atoms NOT LIKE '%OR%')
+    FROM ex9_result WHERE n IN (8, 9, 21))),
+  ('a boolean column is an atom, also under NOT',
+   (SELECT bool_and(atoms LIKE '%flag=%') FROM ex9_result WHERE n IN (14, 20))),
+  ('a boolean expression other than a column or a function is not an atom',
+   (SELECT bool_and(candidate IS NULL) FROM ex9_result WHERE n = 22)),
+  ('a boolean function is an expression atom',
+   (SELECT bool_or(candidate = 'ex9_t ((isfinite(ts)))') FROM ex9_result WHERE n = 23)),
   ('IS NULL is an atom, IS NOT NULL is not',
    (SELECT bool_and(atoms LIKE '%payload=%') FROM ex9_result WHERE n = 10)
    AND (SELECT bool_and(atoms NOT LIKE '%payload%') FROM ex9_result WHERE n = 11)),

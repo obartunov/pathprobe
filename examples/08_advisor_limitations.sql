@@ -34,8 +34,9 @@ SELECT * FROM pg_temp.ex8_advise(
 SELECT * FROM pg_temp.ex8_advise(
   'SELECT * FROM ex8_orders WHERE total IS NOT NULL AND customer_id = 9');
 
--- C. An OR is not split into branches.  The whole clause becomes one
--- boolean expression atom; the candidate built from it loses.
+-- C. An OR is skipped as a whole: no atom, no candidate.  (When the
+-- advisor audit was written the whole clause became one boolean expression
+-- candidate; that was fixed.)
 SELECT * FROM pg_temp.ex8_advise(
   'SELECT * FROM ex8_orders WHERE status = 3 OR total = 7');
 
@@ -78,10 +79,10 @@ FROM (VALUES
    (SELECT bool_or(candidate LIKE '%ON ex8_customers (region)%') FROM a)),
   ('B: IS NOT NULL produced no atom; customer_id did',
    (SELECT bool_and(atoms NOT LIKE '%total%' AND atoms LIKE '%customer_id=%') FROM b)),
-  ('C: the OR clause became a single expression candidate, not branches',
-   (SELECT count(*) = 1 AND bool_and(candidate LIKE '%OR%') FROM c)),
-  ('C: and it did not help',
-   (SELECT bool_and(NOT in_plan AND benefit = 0) FROM c)),
+  ('C: the OR clause produced no atom and no candidate',
+   (SELECT bool_and(candidate IS NULL AND atoms NOT LIKE '%OR%') FROM c)),
+  ('C: and the advisor reports no benefit',
+   (SELECT bool_and(benefit = 0) FROM c)),
   ('D: with an existing index, no plain (status) candidate and no benefit',
    (SELECT bool_and(candidate LIKE '%INCLUDE%' AND benefit = 0) FROM d)),
   ('E: the hand-written join-column hypothesis survived at its relation',
