@@ -94,8 +94,10 @@ FROM (VALUES
   ('IS NULL is an atom, IS NOT NULL is not',
    (SELECT bool_and(atoms LIKE '%payload=%') FROM ex9_result WHERE n = 10)
    AND (SELECT bool_and(atoms NOT LIKE '%payload%') FROM ex9_result WHERE n = 11)),
-  ('an expression index that already exists is proposed again',
-   (SELECT bool_or(candidate = 'ex9_t ((lower(d)))') FROM ex9_result WHERE n = 13)),
+  ('an expression index that already exists is not proposed again',
+   (SELECT bool_and(candidate IS NULL) FROM ex9_result WHERE n = 13)),
+  ('... while a new expression is (12)',
+   (SELECT bool_or(candidate = 'ex9_t (((a + b)))') FROM ex9_result WHERE n = 12)),
   ('existing (b, a) does not suppress (a, b)',
    (SELECT bool_or(candidate = 'ex9_t (a, b)') FROM ex9_result WHERE n = 15)),
   ('a prefix of an existing index is proposed without advise_skip_prefix',
