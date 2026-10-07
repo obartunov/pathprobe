@@ -18,8 +18,9 @@ Per base relation, during planning, when `{"advise": true}`:
 atoms       equality members of const-bearing equivalence classes, then
             baserestrictinfo: col op const with a strategy in the column's
             default btree opfamily, col = ANY(array), col IS NULL, boolean
-            forms, and the same with an expression instead of a column;
-            at most 6 atoms per relation (PATHPROBE_ADVISE_MAX)
+            forms (see "Boolean quals" below), and the same with an
+            expression instead of a column; at most 6 atoms per relation
+            (PATHPROBE_ADVISE_MAX)
 single      one candidate per plain-column atom, equalities first
 composite   all equality columns + the first range column, if >= 2 columns
 expression  one candidate per expression atom
@@ -42,7 +43,8 @@ Fates are from the example run at the time of the audit.  `built` =
 `index_build.generated > 0`.  Bug 1 was fixed after the audit (see below);
 since then the four rows that won only by it are `rejected` with `in_plan`
 false: the covering variant of `ex9_u`'s primary key, `(lower(d))`, `(a, b)`
-next to `(b, a)`, and the six-column composite.
+next to `(b, a)`, and the six-column composite.  Bug 2 was fixed after the
+audit too: both OR rows now produce no atom and no candidate.
 
 ```text
 query pattern              advisor behavior                       candidate?  hypo fate             in_plan  class
@@ -76,6 +78,32 @@ b = 7, index (b, a)        (b) + covering; (b) dropped with       yes         re
 d LIKE 'v1%'               no atom                                no          -                     -        limitation; should be
                                                                                                              documented
 8 restrictions             6 atoms kept (flag, payload dropped)   yes         composite survived    yes      unclear: silent cap
+```
+
+## Boolean quals
+
+The policy after the fix of bug 2 (`adv_bool_operand()`), per top-level
+restriction:
+
+```text
+clause                                atom
+------------------------------------  ----------------------------------------
+flag (boolean column)                 yes: (flag), equality-like
+NOT flag                              yes: (flag)
+flag IS TRUE / IS FALSE               yes: (flag)
+f(x) returning boolean (isfinite(ts)) yes: expression atom ((f(x))); an index
+                                      on f(x) serves WHERE f(x)
+NOT f(x), f(x) IS TRUE / IS FALSE     yes: ((f(x)))
+x = 1 OR y = 2, x = 1 OR x = 2        no: skipped as a whole (no per-branch
+                                      atom, no common-column extraction)
+(a = 1 AND b = 2) OR c = 3            no: skipped
+a = 1 AND b = 2 (top level)           not one clause: the planner splits it,
+                                      and each child is an atom (a=, b=)
+(a > b) IS TRUE, other boolean        no: not proposed as an expression index
+  expressions (CASE, IS DISTINCT ...)
+col op const returning boolean        handled as an operator qual, not as a
+                                      boolean expression
+other BooleanTest forms (IS UNKNOWN)  no, as in core
 ```
 
 ## Traceability
@@ -145,6 +173,12 @@ displaced by another advisor candidate          single-column candidates by the
    `CREATE INDEX ... (((c = 3) OR (ts = ...)))`.  `docs/user/advisor.md`
    said OR branches are skipped.  For `ts = x OR ts = y` no `(ts)` candidate
    is generated.
+
+   Fixed after the audit: the operand of a boolean qual must be a boolean
+   column or a function returning boolean, so an OR (and any other
+   boolean expression) produces no atom.  An OR is skipped as a whole,
+   also on one column: `ts = x OR ts = y` gets no `(ts)` candidate.  The
+   final policy is under "Boolean quals".
 3. **Expression candidates bypass deduplication.**  They are not checked by
    `adv_skip_candidate()`, and `adv_coverage()` ignores expression indexes,
    so an existing expression index is proposed again.
@@ -184,7 +218,7 @@ Bugs first.  Items marked done were implemented after the audit.
 
 1. Done: hypothetical btree indexes get a tree height, so they are not
    cheaper than identical real indexes.
-2. Do not treat OR / AND `BoolExpr` as a boolean atom.
+2. Done: OR / AND `BoolExpr` is not a boolean atom.
 3. Run expression candidates through deduplication, including existing
    expression indexes.
 4. Report dropped atoms (cap) and skipped clause classes in the advisor

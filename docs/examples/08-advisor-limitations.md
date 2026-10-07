@@ -31,8 +31,8 @@ B  total IS NOT NULL AND customer_id = 9
    adv_1 ex8_orders (customer_id)                survived  in_plan
 
 C  status = 3 OR total = 7
-   atoms: "ex8_orders: (((status = 3) OR (total = 7)))="
-   adv_1 ex8_orders ((((status = 3) OR (total = 7))))   rejected   benefit 0.00
+   atoms: "ex8_orders: "
+   no candidate                                                benefit 0.00
 
 D  status = 3 (an index on status exists)
    adv_1 ex8_orders (status) INCLUDE (...)       rejected            benefit 0.00
@@ -54,8 +54,9 @@ A hypothesis that is never proposed is never measured.
   empty.
 - B: `IS NOT NULL` is skipped silently; the output does not list skipped
   clauses.
-- C: an `OR` is not split into branches.  The whole clause becomes one
-  boolean expression atom, and its candidate loses.
+- C: an `OR` is skipped as a whole: no atom, no candidate, not split into
+  branches.  The advisor audit found that the whole clause used to become
+  one boolean expression candidate; that was fixed after the audit.
 - D: the advisor never proposes a candidate with the same keys as an
   existing index (`advise_skip_prefix` also drops existing prefixes).  The
   covering variant loses; a benefit of 0 is evidence that the existing

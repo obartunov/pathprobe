@@ -95,7 +95,8 @@ column range constant
 column IN (...)
 column = ANY(array)
 column IS NULL
-boolean clause forms that core PostgreSQL can match to boolean indexes
+a boolean column or a function returning boolean, bare, under NOT, or with
+  IS TRUE / IS FALSE
 simple expression arguments
 ```
 
@@ -105,6 +106,8 @@ Current v1 skips:
 join quals (a constant reaching a join column through an equivalence class
   still produces an atom)
 IS NOT NULL
+OR restrictions (as a whole)
+boolean expressions other than a column or a function (e.g. (a > b) IS TRUE)
 unsupported BooleanTest forms
 LIKE / pattern operators (no strategy in the default btree opfamily)
 ORDER BY ... DESC or NULLS FIRST (no ordered candidate)
@@ -113,8 +116,14 @@ partial indexes (never proposed)
 ```
 
 Skipped does not mean impossible.  It means this advisor pass does not model
-that shape.  An `OR` restriction is not split into branches: the whole clause
-currently becomes one boolean expression candidate, which is a known defect.
+that shape.  An `OR` restriction is skipped as a whole, also when all its
+branches test one column (`ts = x OR ts = y` gets no `(ts)` candidate); it
+is not split into branches and not proposed as a boolean expression index.
+A boolean qual becomes an atom only when its operand is a boolean column or
+a function returning boolean (`flag`, `NOT flag`, `flag IS TRUE`,
+`isfinite(ts)`); other boolean expressions are skipped.  The audit found
+that an OR used to become one boolean expression candidate; that was fixed
+after the audit.
 
 One more known defect: an existing expression index is proposed again.  Such
 a duplicate is costed like the real index (hypothetical btree indexes get a
