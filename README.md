@@ -57,6 +57,36 @@ dominator, and `paths[]` gives the child edges of join, wrapper and
 multi-input paths, so the path graph can be read without inferring it from
 costs or event order.
 
+## Current advisor scope
+
+```text
+The advisor is not a workload advisor.
+It does not search the index design space.
+It tries a small fixed family of simple btree candidates for one query.
+pathprobe reports what the planner did with them.
+```
+
+The advisor is intentionally small: a local single-query candidate
+generator.  For one query it derives simple btree candidates (single
+column, composite, expression, covering, ASC ordered) from the restrictions
+and ordering the planner sees, injects them as hypothetical indexes, and
+reports for each whether an index path was built, what `add_path()` did
+with it, and whether the final plan uses it.  It is a planner-observable
+hypothetical experiment, not an index recommendation.
+
+`in_plan = true` means that a generated candidate was used by this query's
+plan in this planning context (statistics, settings, the other candidates
+present).  It does not mean the index is useful for the workload.
+
+A shape the advisor does not generate is not a failure of PostgreSQL and
+not proof that no useful index exists; this advisor pass did not try it.
+Not generated: `ORDER BY ... DESC` / `NULLS FIRST` ordering,
+`LIKE 'prefix%'` indexes, partial indexes, same-column OR extraction (an OR
+is skipped as a whole).  Skipped clauses are not reported, and atoms beyond
+the sixth per relation are dropped by extraction order, not usefulness, and
+only counted.  Rules and output: [advisor](docs/user/advisor.md); what was
+checked and fixed: [advisor audit](docs/technical/advisor-audit.md).
+
 ## Current status
 
 The current line is v1.3 plus the lifecycle work: candidate fates derived
@@ -142,10 +172,9 @@ executor raises an error.  See [proposed paths](docs/user/proposed-paths.md).
 
 `hypo_indexes` (columns) and `hypo_sql` (`CREATE INDEX` text, superuser) add
 hypothetical indexes to the planner; `{"advise": true}` lets the advisor
-derive them from the query.  The advisor is a local single-query candidate
-generator: it proposes candidates for one query, and pathprobe shows whether
-they helped that query's plan.  `injected=true` only says the index was
-offered.
+derive them from the query (see
+[current advisor scope](#current-advisor-scope)).  `injected=true` only says
+the index was offered.
 
 A hypothetical index may be injected and examined, but still generate no
 IndexPath.  pathprobe reports that as `not_generated`, with the reason in
@@ -238,7 +267,7 @@ docs/technical/json-format.md     machine-readable output, coverage
 docs/technical/architecture.md    layers
 docs/technical/implementation.md  code map
 docs/technical/output-format-audit.md  readability audit of the output
-docs/technical/advisor-audit.md   what the advisor generates, skips and gets wrong
+docs/technical/advisor-audit.md   advisor audit: what it generates and skips, fixes
 docs/technical/safety-and-limits.md, overhead.md
 docs/testing/                     model-based tests, generator, test matrix
 ```
@@ -254,12 +283,8 @@ docs/testing/                     model-based tests, generator, test matrix
   drops produce no DISPLACED event.
 - `path_id` may conflate join paths under GEQO, and any paths without the
   core patch.
-- The advisor is a local single-query candidate generator, not a workload
-  advisor, and it proposes only simple btree shapes.  It does not handle
-  `ORDER BY ... DESC`, `LIKE 'prefix%'`, partial indexes or OR
-  restrictions (skipped as a whole), and keeps at most 6 atoms per relation
-  (the rest are counted, not used).  See [advisor](docs/user/advisor.md) and the
-  [advisor audit](docs/technical/advisor-audit.md).
+- The advisor tries only a fixed family of simple btree candidates for one
+  query; see [current advisor scope](#current-advisor-scope).
 - `excluded` reports that a join family was blocked, not who blocked it
   (`enable_*`, pg_plan_advice or another extension).
 - Not supported for non-superusers yet: probing relations with row-level
