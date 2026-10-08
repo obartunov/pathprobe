@@ -6,15 +6,42 @@
 > view/rule base exposure fail closed; `hypo_sql` denied; structured btree hypo
 > only, on authorized relations and columns).  See the README security model.
 
-Advisor mode asks a narrow question:
+The advisor is a local, single-query advisor: a candidate generator.  For
+one query it derives simple btree index candidates from the query's
+restrictions and ordering, adds them to that query's planning as
+hypothetical indexes, and pathprobe reports what the planner did with each.
+The question is narrow:
 
 ```text
 Would any simple hypothetical indexes improve this query's plan?
 ```
 
-It does not create indexes.  It does not prove that an index is globally good.
-It only shows that a hypothetical index candidate helped this query in the real
-planner competition.
+It does not create indexes.  It does not look at other queries: it is not a
+workload advisor.  It does not search for the best index: it proposes only
+the shapes listed under "Supported advisor shapes", and a useful index of
+another shape is never proposed.  A candidate that helped shows that it
+helped this query in the real planner competition, nothing more.
+
+## What the advisor generates
+
+Per base relation:
+
+```text
+atoms       the indexable restrictions, one per distinct column or
+            expression: equalities from equivalence classes first, then the
+            other restrictions; at most 6 per relation, the rest dropped
+single      one candidate per column atom, equalities first
+composite   all equality columns + the first range column, if >= 2 columns
+expression  one candidate per expression atom
+covering    the composite (or the first atom) + INCLUDE of the relation's
+            other needed columns, if they fit in 8 columns
+ordered     ORDER BY (else GROUP BY) columns, when all belong to this
+            relation; ASC only
+```
+
+A candidate is not proposed when an existing btree index has the same keys
+(see "Existing index skip").  The number of candidates per query is capped
+by `pathprobe.max_advisor_candidates`.
 
 ## Advisor example
 
@@ -50,6 +77,32 @@ hypo_indexes[].fate            not_examined / not_generated / rejected /
                                displaced / survived / ... (see event-model.md)
 hypo_indexes[].index_build     build_index_paths() calls and outcome, or null
 ```
+
+## Reading advisor output
+
+```text
+run the advisor            pathprobe_propose_json(query, '{"advise": true}')
+                           (pathprobe_propose() for text)
+proposed indexes           hypo_indexes[]: name adv_N, ddl; advisor.atoms
+                           shows what they were derived from
+did one enter the plan?    hypo_indexes[].in_plan; fate says what happened in
+                           add_path() at the index's relation
+were candidates truncated  advisor.truncated: the candidate cap was hit
+were atoms truncated       advisor.atom_truncated, advisor.atoms_dropped, and
+                           "(+N dropped)" at the end of a relation's list in
+                           advisor.atoms
+was a case skipped         not reported.  A column or expression of the
+                           query's restrictions that is missing from
+                           advisor.atoms was skipped (see "Supported advisor
+                           shapes") or, with atom_truncated, dropped.  A
+                           skipped restriction on a column that is an atom
+                           through another restriction is not visible
+```
+
+[Example 7](../examples/07-advisor-candidate-lifecycle.md) walks one query
+through these fields, [example 8](../examples/08-advisor-limitations.md)
+shows cases the advisor does not propose, and
+[example 9](../examples/09-advisor-audit.md) runs 23 common query patterns.
 
 A hypothetical index goes through separate stages, and each has its own
 evidence:
@@ -123,28 +176,41 @@ partial indexes (never proposed)
 ```
 
 Skipped does not mean impossible.  It means this advisor pass does not model
-that shape.  An `OR` restriction is skipped as a whole, also when all its
-branches test one column (`ts = x OR ts = y` gets no `(ts)` candidate); it
-is not split into branches and not proposed as a boolean expression index.
-A boolean qual becomes an atom only when its operand is a boolean column or
-a function returning boolean (`flag`, `NOT flag`, `flag IS TRUE`,
-`isfinite(ts)`); other boolean expressions are skipped.  The audit found
-that an OR used to become one boolean expression candidate; that was fixed
-after the audit.
+that shape, and the output does not say which restrictions were skipped.
+An `OR` restriction is skipped as a whole, also when all its branches test
+one column (`ts = x OR ts = y` gets no `(ts)` candidate); it is not split
+into branches and not proposed as a boolean expression index.  A boolean
+qual becomes an atom only when its operand is a boolean column or a function
+returning boolean (`flag`, `NOT flag`, `flag IS TRUE`, `isfinite(ts)`);
+other boolean expressions are skipped.
 
 The advisor keeps at most six atoms per relation, equivalence-class
 equalities first, then the other restrictions in planner order; the rest
-are dropped without affecting the candidates.  The audit found that nothing
-reported the dropped atoms.  After the audit they are counted:
-`advisor.atom_truncated` is true, `advisor.atoms_dropped` says how many, and
-the relation's `atoms` list ends with `(+N dropped)`.  When it is true the
-candidates come from the first six atoms only, not from every restriction.
+are dropped.  The choice follows extraction order, not usefulness.  When
+`advisor.atom_truncated` is true the candidates come from the first six atoms
+only, not from every restriction; the dropped atoms are counted, not named.
 
-An expression candidate that an existing expression index already provides
-is not proposed: the audit found that `(lower(d))` was proposed again next to
-an existing `lower(d)` index, and that was fixed after the audit.  See
-`docs/technical/advisor-audit.md` and
-[example 9](../examples/09-advisor-audit.md).
+## Changes after the advisor audit
+
+The [advisor audit](../technical/advisor-audit.md) found four problems,
+fixed since:
+
+```text
+hypothetical btree costing   a hypothetical btree index was cheaper than an
+                             identical real one (no descent cost), so
+                             duplicates of existing indexes won; it now costs
+                             the same
+OR restrictions              an OR became one bogus boolean expression
+                             candidate; now it is skipped
+expression duplicates        an existing expression index, e.g. on lower(d),
+                             was proposed again; now it is not
+silent atom limit            atoms over the limit were dropped without a
+                             trace; now they are counted (atom_truncated)
+```
+
+Output from before these fixes, such as a duplicate of an existing index
+winning `in_plan` by a cost difference of 0.25, does not reflect the current
+advisor.
 
 ## Existing index skip
 

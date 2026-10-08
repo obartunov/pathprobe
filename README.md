@@ -142,7 +142,10 @@ executor raises an error.  See [proposed paths](docs/user/proposed-paths.md).
 
 `hypo_indexes` (columns) and `hypo_sql` (`CREATE INDEX` text, superuser) add
 hypothetical indexes to the planner; `{"advise": true}` lets the advisor
-derive them from the query.  `injected=true` only says the index was offered.
+derive them from the query.  The advisor is a local single-query candidate
+generator: it proposes candidates for one query, and pathprobe shows whether
+they helped that query's plan.  `injected=true` only says the index was
+offered.
 
 A hypothetical index may be injected and examined, but still generate no
 IndexPath.  pathprobe reports that as `not_generated`, with the reason in
@@ -251,8 +254,11 @@ docs/testing/                     model-based tests, generator, test matrix
   drops produce no DISPLACED event.
 - `path_id` may conflate join paths under GEQO, and any paths without the
   core patch.
-- The advisor is a local candidate generator with known defects (OR
-  clauses, duplicate expression indexes, hypothetical btree costing); see
+- The advisor is a local single-query candidate generator, not a workload
+  advisor, and it proposes only simple btree shapes.  It does not handle
+  `ORDER BY ... DESC`, `LIKE 'prefix%'`, partial indexes or OR
+  restrictions (skipped as a whole), and keeps at most 6 atoms per relation
+  (the rest are counted, not used).  See [advisor](docs/user/advisor.md) and the
   [advisor audit](docs/technical/advisor-audit.md).
 - `excluded` reports that a join family was blocked, not who blocked it
   (`enable_*`, pg_plan_advice or another extension).
