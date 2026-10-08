@@ -20,7 +20,8 @@ atoms       equality members of const-bearing equivalence classes, then
             default btree opfamily, col = ANY(array), col IS NULL, boolean
             forms (see "Boolean quals" below), and the same with an
             expression instead of a column; at most 6 atoms per relation
-            (PATHPROBE_ADVISE_MAX)
+            (PATHPROBE_ADVISE_MAX); atoms beyond it are dropped and, after
+            the fix, counted (advisor.atoms_dropped, see below)
 single      one candidate per plain-column atom, equalities first
 composite   all equality columns + the first range column, if >= 2 columns
 expression  one candidate per expression atom
@@ -33,7 +34,8 @@ dedup       same column list as an earlier candidate of this run; same keys
             strict prefix of an existing plain btree index; for expression
             candidates the same against existing expression indexes (after
             the fix of bug 3, see below); partial indexes never count
-caps        pathprobe.max_advisor_candidates per query (advisor.truncated)
+caps        pathprobe.max_advisor_candidates per query (advisor.truncated);
+            the atom limit is reported apart (advisor.atom_truncated)
 ```
 
 Every candidate becomes a hypothetical index named `adv_N` and goes through
@@ -47,7 +49,9 @@ since then the four rows that won only by it are `rejected` with `in_plan`
 false: the covering variant of `ex9_u`'s primary key, `(lower(d))`, `(a, b)`
 next to `(b, a)`, and the six-column composite.  Bug 2 was fixed after the
 audit too: both OR rows now produce no atom and no candidate.  After the
-fix of bug 3 the `lower(d)` row produces no candidate at all.
+fix of bug 3 the `lower(d)` row produces no candidate at all.  The
+eight-restriction row keeps the same six atoms and candidates, but the two
+dropped atoms are now reported.
 
 ```text
 query pattern              advisor behavior                       candidate?  hypo fate             in_plan  class
@@ -201,6 +205,15 @@ displaced by another advisor candidate          single-column candidates by the
 
 - At most 6 atoms per relation; further restrictions are dropped without a
   flag (`advisor.truncated` is only the candidate cap).
+
+  Fixed after the audit, as far as visibility goes: the limit and the
+  candidates are unchanged, but dropped atoms are counted.  The advisor
+  block has `atom_limit`, `atoms_seen`, `atoms_kept`, `atoms_dropped` and
+  `atom_truncated` (summed over relations; a distinct atom is counted once),
+  and the `atoms` string ends a relation's list with `(+N dropped)`.
+  `truncated` keeps its meaning, the candidate cap.  Which atoms are kept is
+  still decided by extraction order (equivalence-class equalities first),
+  not by usefulness, and the dropped atoms are not named.
 - `ORDER BY ... DESC` (and `NULLS FIRST`) produce no ordered candidate,
   although an ASC btree serves a uniform DESC order by a backward scan.
 - `LIKE 'prefix%'` produces no atom: `~~` has no strategy in the default
@@ -218,7 +231,8 @@ why a candidate was generated   single / composite / expression / covering /
                                 ordered: not reported
 which clause(s) caused it       only via the atoms string and the DDL
 why a clause was skipped        not reported (join qual, IS NOT NULL, LIKE,
-                                DESC, atom cap)
+                                DESC); the atom cap only as a count
+                                (advisor.atoms_dropped), not which atoms
 whether it duplicates or        not reported; existing indexes are not named
   extends an existing index
 advisor candidate -> hypo link  adv_N naming only; no source field
@@ -235,6 +249,7 @@ Bugs first.  Items marked done were implemented after the audit.
 2. Done: OR / AND `BoolExpr` is not a boolean atom.
 3. Done: expression candidates are deduplicated against existing
    expression indexes.
-4. Report dropped atoms (cap) and skipped clause classes in the advisor
-   block; mark each hypothetical index with its source and generation rule.
-   These are additive JSON fields and need a gate.
+4. Done in part: dropped atoms (cap) are counted in the advisor block.
+   Still open: skipped clause classes in the advisor block; mark each
+   hypothetical index with its source and generation rule.  These are
+   additive JSON fields and need a gate.

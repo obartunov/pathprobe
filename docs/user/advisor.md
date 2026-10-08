@@ -29,7 +29,13 @@ Machine-readable fields:
 
 ```text
 advisor.enabled               advisor ran
-advisor.truncated             candidate cap was hit
+advisor.truncated             candidate cap was hit (not the atom limit)
+advisor.atom_limit            atoms kept per relation (6)
+advisor.atoms_seen            distinct atoms found, summed over relations
+advisor.atoms_kept            atoms used for candidates
+advisor.atoms_dropped         atoms over the per-relation limit, not used
+advisor.atom_truncated        atoms_dropped > 0: not every restriction was
+                              considered
 advisor.atoms                 compact description of derived index atoms
 advisor.baseline_cost          plan cost without advisor candidates
 advisor.plan_cost              plan cost with advisor candidates
@@ -111,7 +117,8 @@ boolean expressions other than a column or a function (e.g. (a > b) IS TRUE)
 unsupported BooleanTest forms
 LIKE / pattern operators (no strategy in the default btree opfamily)
 ORDER BY ... DESC or NULLS FIRST (no ordered candidate)
-atoms beyond the sixth per relation (dropped without a flag)
+atoms beyond the sixth per relation (dropped, but counted:
+  advisor.atoms_dropped, advisor.atom_truncated)
 partial indexes (never proposed)
 ```
 
@@ -124,6 +131,14 @@ a function returning boolean (`flag`, `NOT flag`, `flag IS TRUE`,
 `isfinite(ts)`); other boolean expressions are skipped.  The audit found
 that an OR used to become one boolean expression candidate; that was fixed
 after the audit.
+
+The advisor keeps at most six atoms per relation, equivalence-class
+equalities first, then the other restrictions in planner order; the rest
+are dropped without affecting the candidates.  The audit found that nothing
+reported the dropped atoms.  After the audit they are counted:
+`advisor.atom_truncated` is true, `advisor.atoms_dropped` says how many, and
+the relation's `atoms` list ends with `(+N dropped)`.  When it is true the
+candidates come from the first six atoms only, not from every restriction.
 
 An expression candidate that an existing expression index already provides
 is not proposed: the audit found that `(lower(d))` was proposed again next to

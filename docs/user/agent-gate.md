@@ -46,6 +46,7 @@ limits.events_truncated      the event log hit its cap: evidence incomplete
 limits.summary_truncated
 advisor.enabled
 advisor.truncated
+advisor.atom_truncated
 advisor.query_level_benefit
 hypo_indexes[].fate          not_examined / not_generated / rejected /
                              displaced / survived / unknown ...

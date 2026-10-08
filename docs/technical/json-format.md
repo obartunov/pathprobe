@@ -280,6 +280,11 @@ The legacy top-level `fate` object uses the same derivation as
 {
   "enabled": true,
   "truncated": false,
+  "atom_limit": 6,
+  "atoms_seen": 2,
+  "atoms_kept": 2,
+  "atoms_dropped": 0,
+  "atom_truncated": false,
   "atoms": "t: id=, v~",
   "baseline_cost": 59.0,
   "plan_cost": 4.05,
@@ -289,6 +294,15 @@ The legacy top-level `fate` object uses the same derivation as
 
 `query_level_benefit = baseline_cost - plan_cost`.  A positive value means the
 advisor candidate set improved this query's final plan cost.
+
+`truncated` is the candidate cap (`pathprobe.max_advisor_candidates`).  The
+atom limit is separate: the advisor keeps at most `atom_limit` atoms per
+relation.  `atoms_seen` counts distinct atoms, `atoms_kept` those used for
+candidates, `atoms_dropped` the rest; all three are summed over relations,
+and `atoms_seen = atoms_kept + atoms_dropped`.  `atom_truncated` is
+`atoms_dropped > 0`.  In `atoms`, a relation that dropped atoms ends its list
+with `(+N dropped)`.  The five fields are present also when the advisor is
+off (zeros, false).
 
 ## hypo_indexes[]
 

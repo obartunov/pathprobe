@@ -39,7 +39,7 @@ A selection of rows, cells abbreviated:
 13 | expression, index exists | ex9_t: (lower(d))=            |                        |       |           |
 15 | keys of (b, a) reversed  | ex9_t: a=, b=                 | ex9_t (a, b)           |     1 | rejected  | f
 17 | LIKE prefix              | ex9_t:                        |                        |       |           |
-18 | eight restrictions       | ex9_t: a=, b=, c=, d=, ts=, id= | ex9_t (a, b, c, d, ts, id) | 1 | rejected | f
+18 | eight restrictions       | ex9_t: a=, b=, c=, d=, ts=, id= (+2 dropped) | ex9_t (a, b, c, d, ts, id) | 1 | rejected | f
 20 | NOT boolean column       | ex9_t: c=, flag=              | ex9_t (flag)           |     1 | rejected  | f
 21 | AND inside OR            | ex9_t:                        |                        |       |           |
 22 | boolean expression       | ex9_t:                        |                        |       |           |
@@ -72,8 +72,13 @@ A selection of rows, cells abbreviated:
   here), as did `(lower(d))` (13), the six-column composite next to the
   primary key (18) and the covering variant of `ex9_u`'s primary key (7);
   that was fixed.
-- Of eight restrictions only six become atoms (18); nothing reports the two
-  that were dropped.
+- Of eight restrictions only six become atoms (18): the equalities from
+  equivalence classes come first, `flag` and `payload IS NULL` are dropped,
+  and the candidates are built from the six alone.  When the audit was
+  written nothing reported the two dropped atoms; now the atoms list ends
+  with `(+2 dropped)` and the advisor block has `atoms_seen` 8,
+  `atoms_kept` 6, `atoms_dropped` 2 and `atom_truncated` true, while
+  `truncated` (the candidate cap) stays false.
 
 [The audit](../technical/advisor-audit.md) has the full pattern table, the
 classification of each behavior, and the bugs found.
