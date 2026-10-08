@@ -109,6 +109,14 @@ FROM (VALUES
   ('LIKE gets no atom',
    (SELECT bool_and(candidate IS NULL) FROM ex9_result WHERE n = 17)),
   ('only six atoms are kept out of eight restrictions',
-   (SELECT bool_and(atoms NOT LIKE '%flag%' AND atoms NOT LIKE '%payload%') FROM ex9_result WHERE n = 18))) v(label, ok);
+   (SELECT bool_and(atoms NOT LIKE '%flag%' AND atoms NOT LIKE '%payload%') FROM ex9_result WHERE n = 18)),
+  ('... and the two dropped atoms are reported, apart from the candidate cap',
+   (SELECT (j->>'atoms_seen')::int = 8 AND (j->>'atoms_kept')::int = 6
+           AND (j->>'atoms_dropped')::int = 2 AND (j->>'atom_truncated')::bool
+           AND NOT (j->>'truncated')::bool AND j->>'atoms' LIKE '%(+2 dropped)'
+    FROM (SELECT pathprobe_propose_json(q, '{"advise": true}')::jsonb -> 'advisor' AS j
+          FROM ex9_patterns WHERE n = 18) s)),
+  ('no other pattern reaches the atom limit',
+   (SELECT bool_and(atoms NOT LIKE '%dropped%') FROM ex9_result WHERE n <> 18))) v(label, ok);
 
 DROP TABLE ex9_t, ex9_u;
