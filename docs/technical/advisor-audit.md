@@ -8,7 +8,33 @@ This audit records what the advisor (`pathprobe_advisor.c`) generates for
 common query patterns, what it skips, where its output is misleading, and
 what it does not explain.  Evidence: `examples/09_advisor_audit.sql` (one
 table of 30000 rows, existing indexes on `(b, a)` and `(lower(d))`, a second
-table of 3000 rows), plus reading the code.  Nothing here changes behaviour.
+table of 3000 rows), plus reading the code.  The audit itself changed no
+behaviour; the fixes that followed are marked "Fixed after the audit".
+
+## Checkpoint
+
+Advisor audit checkpoint after the atom truncation gate.
+
+```text
+Fixed:
+- hypothetical btree costing (bug 1)
+- OR / BoolExpr bogus expression candidates (bug 2)
+- duplicate expression-index candidates (bug 3)
+- silent atom-limit truncation: now reported (advisor.atom_truncated)
+
+Still not implemented:
+- ORDER BY ... DESC / NULLS FIRST ordered candidates
+- LIKE prefix support
+- partial-index candidates
+- same-column OR extraction
+- candidate generation-rule metadata
+- skipped clause class reporting
+- dropped atom names
+- atom selection beyond extraction order
+```
+
+The tables below record the behaviour at the time of the audit; the notes
+after each bug describe the current behaviour.
 
 ## How it works (from the code)
 
