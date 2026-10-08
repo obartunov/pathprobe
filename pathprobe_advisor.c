@@ -60,9 +60,9 @@
  * default btree opclass family (the same opclass a real CREATE INDEX would
  * use).  Candidates: single-column per qualifying qual (equalities first),
  * one composite (equalities + first range column), one ASC ordered set from
- * query_pathkeys.  Hard cap below keeps the run to one planning pass.
+ * query_pathkeys.  The per-relation atom limit (PATHPROBE_ADVISE_MAX)
+ * keeps the run to one planning pass.
  */
-#define PATHPROBE_ADVISE_MAX 6
 
 /*
  * Index atom: a unique indexable argument collected from the query.
@@ -252,6 +252,33 @@ adv_col_btree_qual(RelOptInfo *rel, RangeTblEntry *rte, RestrictInfo *rinfo,
 	return false;
 }
 
+/* atom identity: attno for columns, equal() for expression atoms */
+static bool
+adv_same_atom(const AdvCol * a, const AdvCol * b)
+{
+	if (a->attno > 0)
+		return b->attno == a->attno;
+	return b->attno == 0 && equal(a->expr, b->expr);
+}
+
+/*
+ * An atom that does not fit into the per-relation limit: not used for
+ * candidates, only counted, once per distinct atom.
+ */
+static void
+adv_drop_atom(List **dropped, const AdvCol * c)
+{
+	ListCell   *lc;
+	AdvCol	   *copy;
+
+	foreach(lc, *dropped)
+		if (adv_same_atom((AdvCol *) lfirst(lc), c))
+			return;
+	copy = (AdvCol *) palloc(sizeof(AdvCol));
+	*copy = *c;
+	*dropped = lappend(*dropped, copy);
+}
+
 /*
  * adv_atoms_from_ecs - equality atoms from the planner's own dedup:
  * every non-const member of a const-bearing EquivalenceClass that belongs
@@ -259,7 +286,7 @@ adv_col_btree_qual(RelOptInfo *rel, RangeTblEntry *rte, RestrictInfo *rinfo,
  */
 static int
 adv_atoms_from_ecs(PlannerInfo *root, RelOptInfo *rel,
-				   AdvCol * cols, int ncols, int maxcols)
+				   AdvCol * cols, int ncols, int maxcols, List **dropped)
 {
 	ListCell   *lc;
 
@@ -285,15 +312,17 @@ adv_atoms_from_ecs(PlannerInfo *root, RelOptInfo *rel,
 				continue;
 			c.is_eq = true;
 			for (i = 0; i < ncols; i++)
-				if ((c.attno > 0 && cols[i].attno == c.attno) ||
-					(c.attno == 0 && cols[i].attno == 0 &&
-					 equal(cols[i].expr, c.expr)))
+				if (adv_same_atom(&cols[i], &c))
 				{
 					cols[i].is_eq = true;
 					break;
 				}
-			if (i == ncols && ncols < maxcols)
+			if (i < ncols)
+				continue;
+			if (ncols < maxcols)
 				cols[ncols++] = c;
+			else
+				adv_drop_atom(dropped, &c);
 		}
 	}
 	return ncols;
@@ -481,6 +510,7 @@ pathprobe_advise_generate(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte
 {
 	AdvCol		cols[PATHPROBE_ADVISE_MAX];
 	int			ncols = 0;
+	List	   *dropped = NIL;
 	AttrNumber	comp[PATHPROBE_MAX_HYPO_COLS];
 	int			ncomp = 0;
 	const char *relname = get_rel_name(rte->relid);
@@ -498,30 +528,37 @@ pathprobe_advise_generate(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte
 	 * Collect index atoms: equality atoms from EquivalenceClasses first
 	 * (the planner's own dedup, with transitivity), then remaining shapes
 	 * from baserestrictinfo.  Uniqueness: attno for columns, equal() for
-	 * expression atoms.
+	 * expression atoms.  Atoms beyond PATHPROBE_ADVISE_MAX are dropped and
+	 * counted.
 	 */
 	ncols = adv_atoms_from_ecs(root, rel, cols, ncols,
-							   PATHPROBE_ADVISE_MAX);
+							   PATHPROBE_ADVISE_MAX, &dropped);
 	foreach(lc, rel->baserestrictinfo)
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
 		AdvCol		c;
 
-		if (ncols >= PATHPROBE_ADVISE_MAX)
-			break;
 		if (!adv_col_btree_qual(rel, rte, rinfo, &c))
 			continue;
 		for (i = 0; i < ncols; i++)
-			if ((c.attno > 0 && cols[i].attno == c.attno) ||
-				(c.attno == 0 && cols[i].attno == 0 &&
-				 equal(cols[i].expr, c.expr)))
-			{
-				cols[i].is_eq |= c.is_eq;
+			if (adv_same_atom(&cols[i], &c))
 				break;
-			}
-		if (i == ncols)
+		if (i < ncols)
+		{
+			/*
+			 * Once the limit is reached kept atoms are not updated: the
+			 * counting pass must not change the candidates.
+			 */
+			if (ncols < PATHPROBE_ADVISE_MAX)
+				cols[i].is_eq |= c.is_eq;
+		}
+		else if (ncols < PATHPROBE_ADVISE_MAX)
 			cols[ncols++] = c;
+		else
+			adv_drop_atom(&dropped, &c);
 	}
+	state->advise_atoms_kept += ncols;
+	state->advise_atoms_dropped += list_length(dropped);
 
 	/* transparency: the atoms stage is printable */
 	{
@@ -542,6 +579,8 @@ pathprobe_advise_generate(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte
 													false, false));
 			appendStringInfoString(&ab, cols[i].is_eq ? "=" : "~");
 		}
+		if (dropped != NIL)
+			appendStringInfo(&ab, " (+%d dropped)", list_length(dropped));
 		if (state->atoms_str && state->atoms_str[0])
 			state->atoms_str = psprintf("%s | %s: %s",
 										state->atoms_str, relname, ab.data);

@@ -272,6 +272,8 @@ typedef struct PathProbeReport
 	double		baseline_cost;	/* final plan cost without injections (advise/hypo); <0 = not measured */
 	char	   *advise_atoms;	/* printable atom stage (advise mode), or NULL */
 	bool		advisor_truncated;	/* advisor candidate cap hit */
+	int			advisor_atoms_kept; /* atoms used for candidates */
+	int			advisor_atoms_dropped;	/* atoms over the per-rel limit */
 } PathProbeReport;
 
 /* ----------

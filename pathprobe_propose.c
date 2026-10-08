@@ -1704,6 +1704,8 @@ pathprobe_propose_internal(const char *query_string,
 	state.atoms_str = NULL;
 	state.advise_generated = 0;
 	state.advise_truncated = false;
+	state.advise_atoms_kept = 0;
+	state.advise_atoms_dropped = 0;
 	state.root = NULL;
 	state.injected = false;
 	state.winner = false;
@@ -1867,6 +1869,8 @@ pathprobe_propose_internal(const char *query_string,
 	report->baseline_cost = -1.0;
 	report->advise_atoms = state.atoms_str;
 	report->advisor_truncated = state.advise_truncated;
+	report->advisor_atoms_kept = state.advise_atoms_kept;
+	report->advisor_atoms_dropped = state.advise_atoms_dropped;
 
 	/*
 	 * Output guard (defence in depth): every hypothetical index relation that
@@ -2913,6 +2917,17 @@ pathprobe_propose_json(PG_FUNCTION_ARGS)
 		appendStringInfo(&out, "\"enabled\":%s,\"truncated\":%s",
 						 advise ? "true" : "false",
 						 report->advisor_truncated ? "true" : "false");
+		/* atom limit: separate from the candidate cap above */
+		appendStringInfo(&out,
+						 ",\"atom_limit\":%d,\"atoms_seen\":%d"
+						 ",\"atoms_kept\":%d,\"atoms_dropped\":%d"
+						 ",\"atom_truncated\":%s",
+						 PATHPROBE_ADVISE_MAX,
+						 report->advisor_atoms_kept +
+						 report->advisor_atoms_dropped,
+						 report->advisor_atoms_kept,
+						 report->advisor_atoms_dropped,
+						 report->advisor_atoms_dropped > 0 ? "true" : "false");
 		if (report->advise_atoms && report->advise_atoms[0])
 		{
 			appendStringInfoString(&out, ",\"atoms\":");

@@ -101,6 +101,12 @@ typedef struct HypoIndexSpec
 #define HYPO_NOTGEN_SCANTYPE			0x04
 
 
+/*
+ * Advisor atoms kept per relation.  Atoms beyond the limit are not used
+ * for candidates; they are counted (advise_atoms_dropped) and reported.
+ */
+#define PATHPROBE_ADVISE_MAX 6
+
 /* ----------
  * ProposedPathState - active during one planning call
  * Valid only between set_rel_pathlist_hook activation and return.
@@ -114,7 +120,9 @@ typedef struct ProposedPathState
 	bool		advise_skip_prefix; /* skip candidates that are a prefix of an existing index */
 	char	   *atoms_str;		/* printable atom stage (advise mode) */
 	int			advise_generated;	/* advisor candidates so far (cap) */
-	bool		advise_truncated;
+	bool		advise_truncated;	/* candidate cap hit */
+	int			advise_atoms_kept;	/* atoms used, summed over rels */
+	int			advise_atoms_dropped;	/* distinct atoms over the limit */
 	PathProbeAccess *access;	/* ACL decision for this probe (never NULL) */
 	PlannerInfo *root;			/* for pathkeys lookup */
 	bool		injected;		/* did we inject at least one? */
