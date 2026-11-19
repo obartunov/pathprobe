@@ -6,7 +6,9 @@ planner path event.
 ## Event words
 
 ```text
-excluded  a join strategy was blocked before a path was generated
+excluded  a merge or hash join strategy was blocked for one (outer,
+          inner) pair before a path was generated (a disabled nested loop
+          is built, not excluded)
 skipped   a candidate was filtered before a Path object was built
 rejected  a Path was built, entered add_path(), and lost
 accepted  a Path entered the frontier

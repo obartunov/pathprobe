@@ -60,8 +60,8 @@ With `enable_mergejoin = off` the same query shows
 All three join strategies competed.  Merge and nested loop joins were built
 and accepted into the pathlist, then displaced; others were rejected by
 `add_path()`, or skipped by `add_path_precheck()` before a Path was built.
-Only the hash join survived.  A disabled strategy is reported as excluded
-before generation, not silently absent.
+Only the hash join survived.  A disabled merge or hash join is reported as
+excluded before generation, not silently absent.
 
 The scan rels show the same: a parameterized `IndexScan` on `o` (usable as
 the inner side of a nested loop) was accepted and survived at `{1}`, but no

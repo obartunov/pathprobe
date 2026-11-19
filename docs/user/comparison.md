@@ -117,14 +117,23 @@ Both can be loaded in the same planning cycle.  How advice shows up in
 - a disabled scan strategy is still costed, so its paths appear with
   `disabled_nodes > 0`, and join paths built on them are skipped with
   `skip_reason: disabled`;
-- a disabled join method is usually not generated at all; `pathprobe`
-  reports the blocked join family as `excluded`.
+- a disabled merge or hash join is not tried for an (outer, inner) pair;
+  `pathprobe` reports the blocked join family as `excluded`.  For a full join
+  the planner still tries merge and hash joins, as disabled paths where the
+  clauses allow, and nothing is excluded;
+- a disabled nested loop is still built, for the join types a nested loop can
+  implement, as a path with `disabled_nodes > 0`, and can still be chosen;
+  nested loop is never reported as `excluded`.
 
 `pathprobe` reports the effect, not its source: `disabled` and `excluded` look
 the same whether the restriction came from `pg_plan_advice`, an `enable_*`
 setting, or another extension.  `excluded` is also coarse: it is emitted only
-when a whole join family (nested loop, merge, hash) is blocked for a join, so
-disabling a single variant such as memoize or materialize does not produce it.
+when a whole merge or hash join family is blocked for a join pair, so
+disabling a single variant such as merge join with materialize does not
+produce it.  The event names the join relation, not the pair: an
+`enable_*` setting applies to every pair, but `pg_plan_advice` sets the mask
+per pair, so a family can be excluded for one input order and tried, even
+chosen, for the other in the same join relation.
 
 ## Why we wrote pathprobe
 

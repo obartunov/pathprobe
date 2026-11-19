@@ -54,7 +54,8 @@ label, a machine reader cannot reliably connect events to a candidate.
 ## Lifecycle alphabet
 
 ```text
-excluded  strategy blocked before generation
+excluded  merge or hash join family not tried for an (outer, inner)
+          pair (not nested loop: a disabled one is still built)
 skipped   candidate filtered before a Path object existed
 rejected  materialized Path lost in add_path()
 accepted  materialized Path entered the frontier

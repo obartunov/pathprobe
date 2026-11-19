@@ -57,7 +57,8 @@ candidates[].fate
 candidates[].gap
 candidates[].event_counts
 summary[].accepted / rejected / skipped / survived / excluded
-events[] with kind excluded  join strategies removed before generation
+events[] with kind excluded  merge or hash join removed before generation,
+                             per (outer, inner) pair (docs/user/comparison.md)
 ```
 
 `unknown`, `unknown_after_accept` and `inconsistent` fates, and any truncation,

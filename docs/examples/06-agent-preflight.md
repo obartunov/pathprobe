@@ -53,8 +53,9 @@ coverage_gaps       what this run could not observe; absent events there
                     index_build)
 truncated           the event log hit its cap: do not treat as complete
 seqscan_only        no other access path survived for that relation
-excluded            strategies removed before generation (enable_* GUCs,
-                    pg_plan_advice)
+excluded            merge or hash join removed before generation (enable_*
+                    GUCs, pg_plan_advice); per (outer, inner) pair, see
+                    docs/user/comparison.md
 hypo fate           which candidate index would be built, and used
 target_not_found    a spec that names no relation of the query, e.g. a typo
 ```
