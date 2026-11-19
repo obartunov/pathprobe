@@ -238,6 +238,12 @@ render_json(PathProbeReport *report, StringInfo out, PathProbeOpts *opts,
 		if (ev->gap_cost != 0.0)
 			appendStringInfo(out, ",\"gap_cost\":%.2f", ev->gap_cost);
 
+		if (ev->decided_by != DECIDED_NONE)
+		{
+			appendStringInfoString(out, ",\"decided_by\":");
+			json_str(out, decided_by_name(ev->decided_by));
+		}
+
 		if (ev->kind == PEK_SKIPPED)
 		{
 			const char *reason =

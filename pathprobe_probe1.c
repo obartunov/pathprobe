@@ -55,6 +55,204 @@ static const Path *last_rejected = NULL;
 static int	last_rejected_id = 0;
 static int	last_rejected_seq = 0;
 
+/* STD_FUZZ_FACTOR and PathCostComparison are local to pathnode.c */
+#define PP_STD_FUZZ_FACTOR 1.01
+
+typedef enum
+{
+	PP_COSTS_EQUAL,
+	PP_COSTS_BETTER1,
+	PP_COSTS_BETTER2,
+	PP_COSTS_DIFFERENT,
+} PpCostComparison;
+
+/*
+ * Copy of compare_path_costs_fuzzily() (static in pathnode.c), which also
+ * says whether disabled_nodes decided.  It must stay identical to the core
+ * function: probe1_decided_by() reports DECIDED_UNKNOWN when the two
+ * disagree on the winner, but a drift that keeps the winner and changes
+ * the reason goes unnoticed.
+ */
+static PpCostComparison
+pp_compare_costs_fuzzily(Path *path1, Path *path2, double fuzz_factor,
+						 bool *by_disabled)
+{
+#define PP_CONSIDER_STARTUP(p) \
+	((p)->param_info == NULL ? (p)->parent->consider_startup : \
+	 (p)->parent->consider_param_startup)
+
+	*by_disabled = false;
+	if (path1->disabled_nodes != path2->disabled_nodes)
+	{
+		*by_disabled = true;
+		return path1->disabled_nodes < path2->disabled_nodes ?
+			PP_COSTS_BETTER1 : PP_COSTS_BETTER2;
+	}
+	if (path1->total_cost > path2->total_cost * fuzz_factor)
+	{
+		if (PP_CONSIDER_STARTUP(path1) &&
+			path2->startup_cost > path1->startup_cost * fuzz_factor)
+			return PP_COSTS_DIFFERENT;
+		return PP_COSTS_BETTER2;
+	}
+	if (path2->total_cost > path1->total_cost * fuzz_factor)
+	{
+		if (PP_CONSIDER_STARTUP(path2) &&
+			path1->startup_cost > path2->startup_cost * fuzz_factor)
+			return PP_COSTS_DIFFERENT;
+		return PP_COSTS_BETTER1;
+	}
+	if (path1->startup_cost > path2->startup_cost * fuzz_factor)
+		return PP_COSTS_BETTER2;
+	if (path2->startup_cost > path1->startup_cost * fuzz_factor)
+		return PP_COSTS_BETTER1;
+	return PP_COSTS_EQUAL;
+#undef PP_CONSIDER_STARTUP
+}
+
+/*
+ * probe1_decided_by
+ *
+ * Repeat add_path()'s comparison of new_path with old_path and return the
+ * first test, in add_path()'s order, that decided it.  new_won says what
+ * add_path() decided: true when new_path removed old_path (DISPLACED,
+ * REMOVED), false when old_path dominated new_path (REJECTED).  Both paths
+ * are still allocated when the hooks run.  The later tests a winner only
+ * has to pass without being worse (rows, parallel safety, outer rels) are
+ * not reported.
+ */
+static PathDecidedBy
+probe1_decided_by(Path *new_path, Path *old_path, bool new_won)
+{
+	List	   *new_keys = new_path->param_info ? NIL : new_path->pathkeys;
+	List	   *old_keys = old_path->param_info ? NIL : old_path->pathkeys;
+	Relids		new_outer = PATH_REQ_OUTER(new_path);
+	Relids		old_outer = PATH_REQ_OUTER(old_path);
+	bool		new_le_rows = new_path->rows <= old_path->rows;
+	bool		new_ge_rows = new_path->rows >= old_path->rows;
+	bool		new_ge_ps = new_path->parallel_safe >= old_path->parallel_safe;
+	bool		new_le_ps = new_path->parallel_safe <= old_path->parallel_safe;
+	PpCostComparison costcmp;
+	PathKeysComparison keyscmp;
+	BMS_Comparison outercmp;
+	bool		by_disabled;
+	int			winner = 0;		/* 1 new, 2 old, 0 neither */
+	PathDecidedBy by = DECIDED_UNKNOWN;
+
+	costcmp = pp_compare_costs_fuzzily(new_path, old_path,
+									   PP_STD_FUZZ_FACTOR, &by_disabled);
+	if (costcmp == PP_COSTS_DIFFERENT)
+		return DECIDED_UNKNOWN;
+	keyscmp = compare_pathkeys(new_keys, old_keys);
+	if (keyscmp == PATHKEYS_DIFFERENT)
+		return DECIDED_UNKNOWN;
+	outercmp = bms_subset_compare(new_outer, old_outer);
+
+	switch (costcmp)
+	{
+		case PP_COSTS_BETTER1:
+			if (keyscmp != PATHKEYS_BETTER2 &&
+				(outercmp == BMS_EQUAL || outercmp == BMS_SUBSET1) &&
+				new_le_rows && new_ge_ps)
+				winner = 1;
+			by = by_disabled ? DECIDED_DISABLED_NODES : DECIDED_COST;
+			break;
+		case PP_COSTS_BETTER2:
+			if (keyscmp != PATHKEYS_BETTER1 &&
+				(outercmp == BMS_EQUAL || outercmp == BMS_SUBSET2) &&
+				new_ge_rows && new_le_ps)
+				winner = 2;
+			by = by_disabled ? DECIDED_DISABLED_NODES : DECIDED_COST;
+			break;
+		case PP_COSTS_EQUAL:
+			if (keyscmp == PATHKEYS_BETTER1)
+			{
+				if ((outercmp == BMS_EQUAL || outercmp == BMS_SUBSET1) &&
+					new_le_rows && new_ge_ps)
+					winner = 1;
+				by = DECIDED_PATHKEYS;
+			}
+			else if (keyscmp == PATHKEYS_BETTER2)
+			{
+				if ((outercmp == BMS_EQUAL || outercmp == BMS_SUBSET2) &&
+					new_ge_rows && new_le_ps)
+					winner = 2;
+				by = DECIDED_PATHKEYS;
+			}
+			else if (outercmp == BMS_EQUAL)
+			{
+				if (new_path->parallel_safe != old_path->parallel_safe)
+				{
+					winner = new_path->parallel_safe ? 1 : 2;
+					by = DECIDED_PARALLEL_SAFE;
+				}
+				else if (new_path->rows != old_path->rows)
+				{
+					winner = new_path->rows < old_path->rows ? 1 : 2;
+					by = DECIDED_ROWS;
+				}
+				else
+				{
+					/*
+					 * add_path() keeps old_path unless this says BETTER1;
+					 * DIFFERENT here is a tie too
+					 */
+					costcmp = pp_compare_costs_fuzzily(new_path, old_path,
+													   1.0000000001,
+													   &by_disabled);
+					winner = costcmp == PP_COSTS_BETTER1 ? 1 : 2;
+					by = (costcmp == PP_COSTS_BETTER1 ||
+						  costcmp == PP_COSTS_BETTER2) ?
+						DECIDED_EXACT_COST : DECIDED_TIE;
+				}
+			}
+			else
+			{
+				if (outercmp == BMS_SUBSET1 && new_le_rows && new_ge_ps)
+					winner = 1;
+				else if (outercmp == BMS_SUBSET2 && new_ge_rows && new_le_ps)
+					winner = 2;
+				by = DECIDED_REQUIRED_OUTER;
+			}
+			break;
+		case PP_COSTS_DIFFERENT:
+			break;
+	}
+
+	if (winner != (new_won ? 1 : 2))
+		return DECIDED_UNKNOWN;
+	return by;
+}
+
+const char *
+decided_by_name(int decided_by)
+{
+	switch ((PathDecidedBy) decided_by)
+	{
+		case DECIDED_NONE:
+			return NULL;
+		case DECIDED_DISABLED_NODES:
+			return "disabled_nodes";
+		case DECIDED_COST:
+			return "cost";
+		case DECIDED_PATHKEYS:
+			return "pathkeys";
+		case DECIDED_REQUIRED_OUTER:
+			return "required_outer";
+		case DECIDED_PARALLEL_SAFE:
+			return "parallel_safe";
+		case DECIDED_ROWS:
+			return "rows";
+		case DECIDED_EXACT_COST:
+			return "exact_cost";
+		case DECIDED_TIE:
+			return "tie";
+		case DECIDED_UNKNOWN:
+			break;
+	}
+	return "unknown";
+}
+
 /*
  * probe1_rejected_hook
  *
@@ -141,6 +339,7 @@ probe1_rejected_hook(RelOptInfo *rel, Path *new_path, Path *dominated_by)
 		ev.link_seq = pelog_path_accepted_seq(pathprobe_active_log,
 											  dominator, rel);
 		ev.link_pathtype = dominator->pathtype;
+		ev.decided_by = probe1_decided_by(new_path, dominator, false);
 	}
 	pelog_append(pathprobe_active_log, &ev);	/* sets ev.seq, or 0 if full */
 	last_rejected_id = ev.path_id;
@@ -240,6 +439,7 @@ probe1_accepted_hook(RelOptInfo *rel, Path *new_path, List *dominated_list)
 		dev.link_path_id = ev.path_id;
 		dev.link_seq = ev.seq;
 		dev.link_pathtype = new_path->pathtype;
+		dev.decided_by = probe1_decided_by(new_path, old_path, true);
 		pelog_append(pathprobe_active_log, &dev);
 
 		/* freed by add_path() after this hook, unless an IndexPath */
@@ -308,6 +508,7 @@ probe1_removed_hook(RelOptInfo *rel, Path *new_path, List *removed_list)
 		ev.link_path_id = remover_id;
 		ev.link_seq = remover_seq;
 		ev.link_pathtype = new_path->pathtype;
+		ev.decided_by = probe1_decided_by(new_path, old_path, true);
 		pelog_append(log, &ev);
 
 		if (!IsA(old_path, IndexPath))

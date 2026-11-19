@@ -1436,6 +1436,9 @@ pathprobe_emit_structured(PathEventLog *log, ExplainState *es)
 			ExplainPropertyInteger("Disabled Nodes", NULL, ev->disabled_nodes, es);
 		if (ev->kept_reason)
 			ExplainPropertyText("Kept", ev->kept_reason, es);
+		if (ev->decided_by != DECIDED_NONE)
+			ExplainPropertyText("Decided By", decided_by_name(ev->decided_by),
+								es);
 		ExplainCloseGroup("Path", NULL, true, es);
 	}
 	ExplainCloseGroup("PathProbe", "PathProbe", false, es);

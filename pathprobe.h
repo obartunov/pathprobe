@@ -83,6 +83,27 @@ typedef enum PathSkipReason
 	SKIP_UNKNOWN,				/* catch-all for unclassified cases             */
 } PathSkipReason;
 
+/*
+ * PathDecidedBy - the add_path() test that decided a REJECTED, DISPLACED or
+ * REMOVED event, in the order add_path() applies them.  Core does not report
+ * it; probe1 recomputes it from the two paths (probe1_decided_by).
+ */
+typedef enum PathDecidedBy
+{
+	DECIDED_NONE = 0,			/* not recorded */
+	DECIDED_DISABLED_NODES,		/* fewer disabled nodes */
+	DECIDED_COST,				/* fuzzily cheaper (STD_FUZZ_FACTOR) */
+	DECIDED_PATHKEYS,			/* costs fuzzily equal, better pathkeys */
+	DECIDED_REQUIRED_OUTER,		/* ... same pathkeys, required outer rels a
+								 * subset of the other's */
+	DECIDED_PARALLEL_SAFE,		/* ... same outer rels, parallel safe */
+	DECIDED_ROWS,				/* ... fewer rows */
+	DECIDED_EXACT_COST,			/* ... cheaper with the near-exact fuzz */
+	DECIDED_TIE,				/* no test decided: add_path() keeps the old
+								 * path */
+	DECIDED_UNKNOWN,			/* recomputation disagrees with add_path() */
+} PathDecidedBy;
+
 /* ----------
  * PathEvent - single immutable record in the event log
  *
@@ -134,6 +155,9 @@ typedef struct PathEvent
 
 	/* precheck context (PEK_SKIPPED only) */
 	int			skip_reason;	/* PathSkipReason - why precheck rejected */
+
+	/* PathDecidedBy (REJECTED with a dominator, DISPLACED, REMOVED) */
+	int			decided_by;
 
 	/* proposed path label (wp, may be NULL)        */
 	const char *label;
@@ -374,6 +398,7 @@ extern void probe1_accepted_hook(RelOptInfo *rel, Path *new_path,
 								 List *dominated_list);
 extern void probe1_removed_hook(RelOptInfo *rel, Path *new_path,
 								List *removed_list);
+extern const char *decided_by_name(int decided_by);
 
 /* GUC: enable probe2 join hooks */
 __attribute__((visibility("default")))

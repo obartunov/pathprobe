@@ -87,7 +87,8 @@ EXPLAIN (FORMAT JSON, COSTS OFF) SELECT * FROM pp_t WHERE id = 42;
          "Rel": "{1}",                 +
          "Path Type": "BitmapHeapScan",+
          "Event": "rejected",          +
-         "Parameterized": false        +
+         "Parameterized": false,       +
+         "Decided By": "cost"          +
        },                              +
        {                               +
          "Seq": 2,                     +
