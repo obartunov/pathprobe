@@ -41,6 +41,10 @@ dominator_path_id, dominator_seq, dominator_pathtype
                 REJECTED only: the old path add_path() stopped at as
                 dominating this one, its ACCEPTED event into the same rel
                 and its type
+decided_by      REJECTED (with a dominator), DISPLACED, REMOVED: the
+                add_path() test that decided, disabled_nodes, cost,
+                pathkeys, required_outer, parallel_safe, rows, exact_cost
+                or tie
 cost_startup, cost_total
                 path costs where meaningful
 gap_cost        difference from local competitor where meaningful

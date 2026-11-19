@@ -99,6 +99,8 @@ dominator_path_id and dominator_pathtype are null only with a server built
   from an older copy of the core patch (see below)
 remover_seq is null if the remover's REJECTED event was not recorded
   (pathprobe.min_gap, event cap); remover_path_id still resolves
+decided_by is set on DISPLACED and REMOVED events and on REJECTED events
+  with a dominator, absent on all others (see "Decided by" below)
 ```
 
 ### Removed before a rejection
@@ -138,6 +140,41 @@ compared and not reported.  The dominator stays in the pathlist, so
 the rel's cheapest total path, which is usually not set while the rel is
 being populated, so it is usually absent.  Do not read it as the distance
 to the dominator.
+
+### Decided by
+
+`decided_by` names the `add_path()` test that decided between the event's
+path and the linked one (dominator, displacer or remover), in the order
+`add_path()` applies them:
+
+```text
+disabled_nodes  fewer disabled nodes; decides before any cost
+cost            fuzzily cheaper (1%) on total cost, or as cheap on total
+                and cheaper on startup; a winner on total can be worse on
+                startup when startup cost is not considered for the rel
+pathkeys        costs fuzzily equal; better pathkeys
+required_outer  ... same pathkeys; required outer rels a subset of the
+                other's
+parallel_safe   ... same outer rels; parallel safe, the other is not
+rows            ... fewer rows
+exact_cost      ... cheaper with the near-exact fuzz (1e-10)
+tie             no test decided (the near-exact comparison may still
+                see different costs); add_path() keeps the old path
+unknown         pathprobe's recomputation did not reach add_path()'s
+                decision
+```
+
+Only the first deciding test is named.  The winner must also be no worse on
+the later ones (pathkeys, outer rels, rows, parallel safety); those are not
+reported.  With `disabled_nodes`, `gap_cost` can be negative: the winner is
+more expensive.
+
+Core does not report the reason.  pathprobe repeats the comparison on the
+two paths, which are still allocated when the hooks run, with a copy of
+`compare_path_costs_fuzzily()` and the `add_path()` branches.  `unknown`
+means that copy no longer matches the server; a change that keeps the
+winner but moves the deciding test would not show.  Partial paths
+(`add_partial_path()`) have no events and no `decided_by`.
 
 ## paths[]
 
