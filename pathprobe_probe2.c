@@ -11,9 +11,13 @@
  *
  * probe2_join_setup_hook  (join_path_setup_hook)
  *   Fires at start of add_paths_to_joinrel() for each (outer, inner) pair.
- *   Records which join strategies are disabled via pgs_mask BEFORE any
- *   path generation begins.  This is the pre-generation filter layer:
- *   strategies with cleared bits never reach try_*_path() at all.
+ *   Records the join families that this pair's pgs_mask keeps
+ *   add_paths_to_joinrel() from trying at all: merge and hash join, except
+ *   for a full join.  A cleared PGS_NESTLOOP_PLAIN only disables the plain
+ *   nested loop, which is still built, so NestLoop is never reported here.
+ *   The event names the join relation, not the pair: a hook that sets the
+ *   mask per pair can leave a family excluded for one input order and tried
+ *   for the other.
  *   kind=PEK_EXCLUDED, source=PATH_SOURCE_JOIN_HOOK.
  *
  * probe2_join_pathlist_hook  (set_join_pathlist_hook)
@@ -61,8 +65,8 @@ RelOptInfo *probe2_join_search_hook(PlannerInfo *root, int levels_needed,
  * probe2_join_setup_hook
  *
  * join_path_setup_hook: fires before any path generation for this pair.
- * Records PEK_EXCLUDED events for join strategies whose PGS bit is clear
- * in extra->pgs_mask - these will never reach try_*_path().
+ * Records PEK_EXCLUDED events for the join families that
+ * add_paths_to_joinrel() will not try for this pair.
  * -------------------------------------------------------------------------
  */
 void
@@ -84,9 +88,14 @@ probe2_join_setup_hook(PlannerInfo *root, RelOptInfo *joinrel,
 	mask = extra->pgs_mask;
 
 	/*
-	 * Record one EXCLUDED event per blocked join strategy. We check the three
-	 * major join families: NestLoop, MergeJoin, HashJoin. Only emit when the
-	 * entire family is blocked (all bits clear).
+	 * One EXCLUDED event per join family that is not tried for this pair.
+	 * Merge and hash join are skipped when all their bits are clear, unless
+	 * the join is a full join: then they may be the only way to implement it
+	 * and are tried as disabled paths, where the clauses allow.  A plain
+	 * nested loop is tried whenever the join type allows one; a cleared
+	 * PGS_NESTLOOP_PLAIN only marks it disabled (initial_cost_nestloop).
+	 * The memoize and materialize variants are not built when their bits
+	 * are clear, but the family as a whole is never excluded.
 	 */
 
 #define EMIT_EXCLUDED(join_pathtype, pgs_bits)                              \
@@ -103,9 +112,11 @@ probe2_join_setup_hook(PlannerInfo *root, RelOptInfo *joinrel,
         pelog_append(pathprobe_active_log, &ev);                            \
     }
 
-	EMIT_EXCLUDED(T_NestLoop, PGS_NESTLOOP_ANY)
+	if (jointype != JOIN_FULL)
+	{
 		EMIT_EXCLUDED(T_MergeJoin, PGS_MERGEJOIN_ANY)
 		EMIT_EXCLUDED(T_HashJoin, PGS_HASHJOIN)
+	}
 
 #undef EMIT_EXCLUDED
 }
