@@ -2,6 +2,7 @@
 *.o
 *.so
 *.bc
+.deps/
 
 # PostgreSQL regression output
 results/
