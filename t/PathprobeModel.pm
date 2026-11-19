@@ -856,6 +856,20 @@ sub check_correctness {
             }
             if (!defined $e->{path_id}) { push @fails, "$k event without path_id"; next; }
             push @fails, "path_id $e->{path_id} not in paths[]" unless $node{$e->{path_id}};
+            # decided_by: on add_path() decisions only, and the
+            # recomputation reached add_path()'s decision
+            {
+                my $by = $e->{decided_by};
+                my $decision = $k eq 'displaced' || $k eq 'removed' ||
+                    ($k eq 'rejected' && defined $e->{dominator_path_id});
+                if ($decision) {
+                    if (!defined $by) { push @fails, "$k event without decided_by"; }
+                    elsif ($by !~ /^(disabled_nodes|cost|pathkeys|required_outer|parallel_safe|rows|exact_cost|tie)$/) {
+                        push @fails, "$k event with decided_by '$by'";
+                    }
+                }
+                elsif (defined $by) { push @fails, "decided_by on a $k event"; }
+            }
             if ($k eq 'rejected') {
                 my $dom = $e->{dominator_path_id};
                 if (!defined $dom) { push @fails, "rejected event without dominator_path_id"; next; }
